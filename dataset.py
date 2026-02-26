@@ -10,6 +10,15 @@ from tokenizer import get_or_train_tokenizer
 
 
 class DialogueDataset(Dataset):
+    """
+    Custom torch dataset class for dialogue data. It takes the raw dataset and a trained tokenizer.
+
+    Args:
+    - config: model configuration dictionary
+    - data: raw dataset to be processed
+    - tokenizer: trained tokenizer to tokenize the text data
+    """
+
     def __init__(self, config, data, tokenizer):
         self.data = data
         self.tokenizer = tokenizer
@@ -21,12 +30,15 @@ class DialogueDataset(Dataset):
         self.sep_id = tokenizer.token_to_id(special_tokens_dict["separator"])
         self.pad_id = tokenizer.token_to_id(special_tokens_dict["padding"])
 
+        # ignore index
+        self.ignore_index = config["cross_entropy_ignore_index"]
+
     def __len__(self):
         return len(self.data)
 
     def __getitem__(self, idx):
         sample = self.data[idx]
-        context = sample.get("context", "")
+        context = sample.get("context", "") # empty if context is not available
         prompt = sample["prompt"]
         response = sample["utterance"]
 
@@ -50,7 +62,7 @@ class DialogueDataset(Dataset):
 
         labels = input_ids.clone()
 
-        # get index position of seperator token
+        # get index position of separator token
         sep_positions = (input_ids == self.sep_id).nonzero(as_tuple=True)[0]
 
         if len(sep_positions) > 1:
@@ -58,59 +70,92 @@ class DialogueDataset(Dataset):
         else:
             cut = 0  # fallback
 
-        # cross entropy loss ignore target where the label = -100
+        # cross entropy loss ignores index with value -100
         # this way we use to mask: [BOS] context [SEP] prompt [SEP]
         # remaining for label: response [EOS]
-        labels[: cut + 1] = -100
+        labels[: cut + 1] = self.ignore_index
 
-        # attention mask: 1 for all tokens (since we dont have padding)
-        attention_mask = torch.ones_like(input_ids, dtype=torch.long)
+        # padding mask: 1/Yes for all tokens (since we dont have padding)
+        padding_mask = torch.ones_like(input_ids, dtype=torch.bool)
 
         # pass to collate_fn
         return {
             "input_ids": input_ids,
             "labels": labels,
-            "attention_mask": attention_mask,
-            "pad_id": self.pad_id, # needed in collate_fn
+            "padding_mask": padding_mask,
         }
 
 
-def collate_fn(batch: List[Dict]):
-    # get data from batch
-    input_ids = [item["input_ids"] for item in batch]
-    labels = [item["labels"] for item in batch]
-    attention_mask = [item["attention_mask"] for item in batch]
+def create_collate_fn(config, tokenizer):
+    """
+    Fuction generator for the custom collate_fn dataloader.
 
-    # get pad ID from dataset (all items have same pad_id)
-    pad_id = batch[0]["pad_id"]
+    Args:
+    - config: model configuration dictionary
+    - tokenizer: trained tokenizer to get special token IDs
+    """
+    # get padding ID
+    padding = config["special_tokens"]["padding"]
+    pad_id = tokenizer.token_to_id(padding)
 
-    # find max length in batch
-    max_len = max([x.size(0) for x in input_ids])
+    # get ignore index
+    ignore_index = config["cross_entropy_ignore_index"]
 
-    # pad sequences to max_len
-    def pad_tensor(tensor, pad_value):
-        return torch.cat(
-            [
-                tensor,
-                torch.full((max_len - tensor.size(0),), pad_value, dtype=torch.long),
-            ]
+    # custom collate_fn to be passed to dataloader
+    def _collate_fn(batch: List[Dict]):
+        """
+        Custom collate_fn to pad variable length sequences in the batch to the same length.
+        """
+        # get data from batch
+        input_ids = [item["input_ids"] for item in batch]
+        labels = [item["labels"] for item in batch]
+        padding_mask = [item["padding_mask"] for item in batch]
+
+        # find max length in batch
+        max_len = max([x.size(0) for x in input_ids])
+
+        # pad sequences to max_len
+        def pad_tensor(tensor, pad_value):
+            return torch.cat(
+                [
+                    tensor,
+                    torch.full(
+                        (max_len - tensor.size(0),), pad_value, dtype=tensor.dtype
+                    ),
+                ]
+            )
+
+        # we need to make all data has a fixed tensor size
+        # so we expand tensor to max_len, fill the empty value with pad_value
+        input_ids = torch.stack([pad_tensor(t, pad_value=pad_id) for t in input_ids])
+
+        # fill label padding with ignore_index, so cross entropy loss will ignore those positions
+        labels = torch.stack([pad_tensor(t, pad_value=ignore_index) for t in labels])
+
+        # mask padding value is 0/False, which means the model should not attend to those positions
+        padding_mask = torch.stack(
+            [pad_tensor(t, pad_value=False) for t in padding_mask]
         )
 
-    # we need to make all data has a fixed tensor size
-    # so we expand tensor to max_len, fill the empty value with pad_value
-    input_ids = torch.stack([pad_tensor(t, pad_value=pad_id) for t in input_ids])
-    labels = torch.stack([pad_tensor(t, pad_value=-100) for t in labels])
-    attention_mask = torch.stack([pad_tensor(t, pad_value=0) for t in attention_mask])
+        # dataloader output
+        return {
+            "input_ids": input_ids,
+            "labels": labels,
+            "padding_mask": padding_mask,
+        }
 
-    # dataloader output
-    return {
-        "input_ids": input_ids,
-        "labels": labels,
-        "attention_mask": attention_mask,
-    }
+    return _collate_fn
 
 
 class DeviceDataLoader:
+    """
+    DeviceDataLoader is a wrapper around torch DataLoader that moves data to the specified device.
+
+    Args:
+    - dl: torch DataLoader to wrap
+    - device: torch device to move data to
+    """
+
     def __init__(self, dl: DataLoader, device):
         self.dl = dl
         self.device = device
@@ -132,6 +177,12 @@ class DeviceDataLoader:
 
 
 def get_dataloaders(config):
+    """
+    Returns train, val, and test dataloaders from the given config.
+
+    Args:
+    - config: model configuration dictionary
+    """
     trust = config["trust_source"]
 
     # load hf corpora
@@ -141,7 +192,7 @@ def get_dataloaders(config):
     )
     ds_test = load_dataset(config["hf_corpus"], split="test", trust_remote_code=trust)
 
-    # tokenize
+    # get tokenizer
     tokenizer = get_or_train_tokenizer(config, ds_train)
 
     # build dataset
@@ -151,6 +202,9 @@ def get_dataloaders(config):
 
     batch_size = config["batch_size"]
     val_test_batch_size = max(1, batch_size // 2)
+
+    # create collate_fn
+    collate_fn = create_collate_fn(config, tokenizer)
 
     # dataloader
     train_dl = DataLoader(

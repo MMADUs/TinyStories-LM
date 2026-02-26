@@ -4,12 +4,12 @@ import torch
 from easydict import EasyDict
 
 # exported model configuration
-model_config = EasyDict(__name__="Model Configuration - v1")
+model_config = EasyDict(__name__="Model Configuration v1")
 
-# OUTPUT CONFIG
-model_config.output_path = ".output"
+# 1. OUTPUT DIR
+model_config.output_dir_path = ".output"
 
-# DATASET CONFIG
+# 2. DATASET CONFIG
 model_config.hf_corpus = "facebook/empathetic_dialogues"  # hugging face corpora
 model_config.trust_source = True  # MAKE SURE REMOTE SCRIPT ARE SAFE!
 model_config.test_ratio = (
@@ -19,7 +19,7 @@ model_config.eval_ratio = (
     0.5  # test eval split ratio (only if dataset require manual split)
 )
 
-# TOKENIZER CONFIG
+# 3. TOKENIZER CONFIG
 model_config.tokenizer_strategy = "subword-level"  # word-level or subword-level
 model_config.pre_tokenizer_strategy = "byte-level"  # whitespace or byte-level
 model_config.vocab_size = 50000  # max vocabulary size
@@ -36,29 +36,52 @@ model_config.force_retrain_tokenizer = (
     True  # retrain a tokenizer even the tokenizer already exist
 )
 
-# MODEL CONFIG
+# 4. MODEL CONFIG
 model_config.random_seed = 42
 model_config.device = (
     torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 )  # torch device
+model_config.init_std = 0.02  # parameter initialization standard deviation
 model_config.num_layers = 4  # num of decoder layer (model depth)
 model_config.num_heads = (
     4  # num of attention heads (must be divisor of d_model: d_model // h)
 )
 model_config.d_model = 256  # model dimension (dim of the vector embedding)
 model_config.d_ff = 1024  # dim of the feed forward block (4 * d_model)
-model_config.dropout = 0.1  # model overall dropout rate
-model_config.estimated_seq_len = (
-    200  # estimation for sequence length (model input+output capacity)
-)
+model_config.dropout = 0.1  # model dropout rate
+model_config.norm_strategy = "RMSNorm"  # normalization strategy (RMSNorm or LayerNorm)
+model_config.estimated_seq_len = 200  # estimation for sequence length (max model input+output capacity during inference)
 
-# TRAINING CONFIG
-model_config.eval = True  # enables evaluation during training
-model_config.mixed_precision = True  # automatic mixed precision by default
+# 5. TRAINING CONFIG
+# training loop
 model_config.batch_size = 16  # train batch size
 model_config.num_epochs = 30  # train epochs
 model_config.lr = 0.0001  # learning rate
 model_config.weight_decay = 0.1  # optimizer weight decay
-model_config.model_ckpt_path = "mlm_ckpt_epoch_{}.pth"  # model checkpoint path
-model_config.model_output_path = "model.pth"  # final model output path
-model_config.continous_train = True  # continue latest checkpoint training
+model_config.cross_entropy_ignore_index = -100  # ignore index for cross entropy loss
+model_config.label_smoothing = 0.1  # label smoothing factor for cross entropy loss
+model_config.lr_warmup_percentage = (
+    0.03  # percentage of total training steps for learning rate warmup
+)
+model_config.clip_grad_max_norm = 1.0  # max norm for gradient clipping
+model_config.callback_metrics_mode = "min"  # # min or max, tells the model if the next metric improvement goes to minimum or maximum direction
+# model checkpoint
+model_config.model_ckpt_filename = (
+    "model_ckpt_{}.pth"  # model checkpoint path with version placeholder
+)
+model_config.ckpt_epsilon = 0.01  # minimum improvement to save a new checkpoint
+# training early stopping
+model_config.early_stopping_patience = 5  # early stopping patience (in epochs)
+model_config.early_stopping_epsilon = (
+    0.001  # minimum improvement to reset early stopping counter
+)
+# learning rate scheduler on plateau
+model_config.lr_reduction_factor = 0.5  # factor to reduce learning rate on plateau
+model_config.lr_reduction_patience = (
+    3  # number of epochs with no improvement to wait before reducing learning rate
+)
+model_config.lr_reduction_cooldown = 1  # number of epochs to wait after reducing learning rate before resuming normal operation
+model_config.lr_reduction_epsilon = (
+    0.001  # minimum improvement to reset learning rate reduction counter
+)
+model_config.lr_reduction_min_lr = 1e-6  # minimum learning rate after reduction

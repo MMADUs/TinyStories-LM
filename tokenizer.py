@@ -9,8 +9,27 @@ from tokenizers.pre_tokenizers import Whitespace, ByteLevel
 from tokenizers.processors import ByteLevel as ByteLevelProcessor
 
 
+def extract_from_corpus(ds, sep_token):
+    """
+    Custom extractor function, depends on the dataset structure.
+    """
+    for item in ds:
+        context = item.get("context", "")
+        prompt = item["prompt"]
+        response = item["utterance"]
+        # structure: content [SEP] prompt [SEP] response
+        yield f"{context} {sep_token} {prompt} {sep_token} {response}"
+
+
 def get_or_train_tokenizer(config, ds) -> Tokenizer:
-    output_dir = Path(config["output_path"])
+    """
+    Get an existing tokenizer from disk or train a new one from the given dataset.
+
+    Args:
+    - config: model configuration dictionary
+    - ds: dataset to train the tokenizer on
+    """
+    output_dir = Path(config["output_dir_path"])
     output_dir.mkdir(parents=True, exist_ok=True)
 
     tokenizer_filename = config["tokenizer_filename"]
@@ -31,14 +50,7 @@ def get_or_train_tokenizer(config, ds) -> Tokenizer:
     sep_token = special_tokens_dict["separator"]
 
     # extract text from corpus
-    corpus = (
-        item["context"]
-        + f" {sep_token} "
-        + item["prompt"]
-        + f" {sep_token} "
-        + item["utterance"]
-        for item in ds
-    )
+    corpus = extract_from_corpus(ds, sep_token)
 
     max_vocab_size = config["vocab_size"]
     strategy = config["tokenizer_strategy"]

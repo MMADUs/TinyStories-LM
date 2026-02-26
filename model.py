@@ -112,10 +112,12 @@ class MultiHeadAttention(nn.Module):
 
         # apply masked attention
         if mask is not None:
-            # mark with -inf to the position where mask == 0
+            # mark with -inf to the position where mask == False
             # this way softmax will make the value 0
-            scores = scores.float()
-            scores.masked_fill_(mask == 0, float("-inf"))
+            scores = (
+                scores.float()
+            )  # safety for mixed precision training, inf requires float32
+            scores.masked_fill_(mask == False, float("-inf"))
             scores = scores.to(query.dtype)
 
         # compute attention weight using softmax
@@ -218,6 +220,32 @@ class LayerNormalization(nn.Module):
         return self.alpha * (x - mean) / (std + self.eps) + self.bias
 
 
+class RMSNorm(nn.Module):
+    """
+    A RMS normalization that normalizes across the last dimension (d_model) using root mean square.
+    A simpler alternative to layer normalization.
+
+    Args:
+    - d_model: dimension of the model (embedding size)
+    - eps: small value to prevent division by zero (default: 1e-6)
+    """
+
+    def __init__(self, d_model: int, eps: float = 10**-6):
+        super().__init__()
+        self.eps = eps
+        # alpha is the only learnable parameter
+        self.alpha = nn.Parameter(torch.ones(d_model))
+
+    def forward(self, x):
+        # x: (batch, seq_len, d_model)
+
+        # rms: (batch, seq_len, 1)
+        rms = torch.sqrt(x.pow(2).mean(dim=-1, keepdim=True) + self.eps)
+
+        # y = a * x / rms
+        return self.alpha * x / rms
+
+
 class ResidualConnection(nn.Module):
     """
     A residual connection with pre-layer normalization.
@@ -227,12 +255,21 @@ class ResidualConnection(nn.Module):
     Args:
     - d_model: dimension of the model (embedding size)
     - dropout: dropout rate
+    - norm_strategy: normalization strategy (RMSNorm or LayerNorm)
     """
 
-    def __init__(self, d_model: int, dropout: float):
+    def __init__(self, d_model: int, dropout: float, norm_strategy: str):
         super().__init__()
+        self.norm_strategy = norm_strategy
 
-        self.norm = LayerNormalization(d_model)
+        # choose normalization strategy based on config
+        if norm_strategy == "RMSNorm":
+            self.norm = RMSNorm(d_model)
+        elif norm_strategy == "LayerNorm":
+            self.norm = LayerNormalization(d_model)
+        else:
+            raise ValueError(f"invalid normalization strategy: {norm_strategy}")
+
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x, sublayer):
@@ -255,6 +292,7 @@ class DecoderBlock(nn.Module):
     - h: number of attention heads
     - d_ff: dimension of the feed forward network
     - dropout: dropout rate
+    - norm_strategy: normalization strategy (RMSNorm or LayerNorm)
     """
 
     def __init__(
@@ -263,14 +301,15 @@ class DecoderBlock(nn.Module):
         h: int,
         d_ff: int,
         dropout: float,
+        norm_strategy: str,
     ):
         super().__init__()
 
         self.attn = MultiHeadAttention(d_model, h, dropout)
         self.ffn = SwiGLUFeedForward(d_model, d_ff, dropout)
         # residual blocks
-        self.attn_resid = ResidualConnection(d_model, dropout)
-        self.ffn_resid = ResidualConnection(d_model, dropout)
+        self.attn_resid = ResidualConnection(d_model, dropout, norm_strategy)
+        self.ffn_resid = ResidualConnection(d_model, dropout, norm_strategy)
 
     def forward(self, x, mask):
         # masked attention
@@ -280,7 +319,7 @@ class DecoderBlock(nn.Module):
         return x
 
 
-class MLMDecoder(nn.Module):
+class LMDecoder(nn.Module):
     """
     The Decoder Model.
 
@@ -291,6 +330,7 @@ class MLMDecoder(nn.Module):
     - d_ff: dimension of the feed forward network
     - num_layers: number of decoder blocks
     - dropout: dropout rate
+    - norm_strategy: normalization strategy (RMSNorm by default)
     """
 
     def __init__(
@@ -301,13 +341,17 @@ class MLMDecoder(nn.Module):
         d_ff: int,
         num_layers: int,
         dropout: float,
+        norm_strategy: str = "RMSNorm",
     ):
         super().__init__()
 
         self.embedding = InputEmbedding(d_model, vocab_size)  # token embedding
         # stack of N decoder blocks
         self.layers = nn.ModuleList(
-            [DecoderBlock(d_model, h, d_ff, dropout) for _ in range(num_layers)]
+            [
+                DecoderBlock(d_model, h, d_ff, dropout, norm_strategy)
+                for _ in range(num_layers)
+            ]
         )
         self.norm = LayerNormalization(d_model)  # final layer normalization
         self.proj = nn.Linear(d_model, vocab_size, bias=False)  # vocab projection
@@ -332,15 +376,19 @@ def generate_causal_mask(seq_len, device):
     The mask has shape (1, 1, seq_len, seq_len) and is lower triangular.
     """
     return (
-        torch.tril(torch.ones((seq_len, seq_len), device=device))
+        torch.tril(torch.ones((seq_len, seq_len), device=device, dtype=torch.bool))
         .unsqueeze(0)
         .unsqueeze(0)
     )
 
 
-def initialize_parameters(model, init_std=0.02):
+def initialize_parameters(model, init_std):
     """
     Initialize the parameters of the model.
+
+    Args:
+    - model: the model to initialize
+    - init_std: standard deviation of the Gassian distribution for weight initialization
     """
     for p in model.parameters():
         if p.dim() > 1:
@@ -371,9 +419,11 @@ def build_model(config, tokenizer):
     d_ff = config["d_ff"]
     num_layers = config["num_layers"]
     dropout = config["dropout"]
+    norm_strategy = config["norm_strategy"]
+    init_std = config["init_std"]
 
-    model = MLMDecoder(vocab_size, d_model, h, d_ff, num_layers, dropout)
-    initialize_parameters(model)
+    model = LMDecoder(vocab_size, d_model, h, d_ff, num_layers, dropout, norm_strategy)
+    initialize_parameters(model, init_std)
 
     return model
 
@@ -389,7 +439,7 @@ def test_decoder():
     batch_size = 2
     seq_len = 10
 
-    model = MLMDecoder(vocab_size, d_model, h, d_ff, num_layers, dropout)
+    model = LMDecoder(vocab_size, d_model, h, d_ff, num_layers, dropout)
 
     x = torch.randint(0, vocab_size, (batch_size, seq_len))
     mask = generate_causal_mask(seq_len, x.device)
