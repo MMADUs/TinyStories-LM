@@ -415,7 +415,7 @@ def build_model(config, tokenizer):
     """
     vocab_size = tokenizer.get_vocab_size()
     d_model = config["d_model"]
-    h = config["h"]
+    h = config["num_heads"]
     d_ff = config["d_ff"]
     num_layers = config["num_layers"]
     dropout = config["dropout"]

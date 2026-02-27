@@ -95,7 +95,7 @@ def get_last_checkpoint_state(config, tokenizer, version):
     lr = config["lr"]
     weight_decay = config["weight_decay"]
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr, weight_decay)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
     optimizer.load_state_dict(optimizer_state)
 
     return model, optimizer, last_epoch
@@ -103,9 +103,9 @@ def get_last_checkpoint_state(config, tokenizer, version):
 
 def train_model(
     config,
-    train_dl: DataLoader,
-    val_dl: DataLoader,
-    tokenizer: Tokenizer,
+    train_dl,
+    val_dl,
+    tokenizer,
     callbacks: Optional[TrainingCallback] = None,
     initial_train: bool = False,
     version: str = "NA",
@@ -143,7 +143,7 @@ def train_model(
         lr = config["lr"]
         weight_decay = config["weight_decay"]
 
-        optimizer = torch.optim.AdamW(model.parameters(), lr, weight_decay)
+        optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
     else:
         print(f"Checkpoint found at {ckpt_path}, loading checkpoint for training")
 
@@ -219,12 +219,15 @@ def train_model(
             # reset optimizer gradient
             optimizer.zero_grad()
 
-            with autocast(device_type=device):
+            with autocast(device_type=str(device)):
                 # forward
-                logits = model(input_ids=input_ids, attention_mask=attention_mask)
+                logits = model(x=input_ids, mask=attention_mask)
+                # shift for next-token prediction: logits[t] predicts labels[t+1]
+                shift_logits = logits[:, :-1, :].contiguous()
+                shift_labels = labels[:, 1:].contiguous()
                 # compute loss
                 loss = loss_fn(
-                    logits.view(-1, tokenizer.get_vocab_size()), labels.view(-1)
+                    shift_logits.view(-1, tokenizer.get_vocab_size()), shift_labels.view(-1)
                 )
 
             # scale gradient then backward
@@ -266,12 +269,15 @@ def train_model(
                 )  # combine padding and causal masks
                 attention_mask = attention_mask.to(device)
 
-                with autocast(device_type=device):
+                with autocast(device_type=str(device)):
                     # forward
-                    logits = model(input_ids=input_ids, attention_mask=attention_mask)
+                    logits = model(x=input_ids, mask=attention_mask)
+                    # shift for next-token prediction: logits[t] predicts labels[t+1]
+                    shift_logits = logits[:, :-1, :].contiguous()
+                    shift_labels = labels[:, 1:].contiguous()
                     # compute loss
                     loss = loss_fn(
-                        logits.view(-1, tokenizer.get_vocab_size()), labels.view(-1)
+                        shift_logits.view(-1, tokenizer.get_vocab_size()), shift_labels.view(-1)
                     )
 
                 val_loss += loss.item()
@@ -335,7 +341,7 @@ def eval_model(config, version: str, test_dl: DataLoader, tokenizer: Tokenizer):
     """
     device = config["device"]
 
-    model, optimizer, _ = get_last_checkpoint_state(config, tokenizer, version)
+    model, _opt, _ = get_last_checkpoint_state(config, tokenizer, version)
 
     model.eval()
     test_loss = 0.0
@@ -359,10 +365,14 @@ def eval_model(config, version: str, test_dl: DataLoader, tokenizer: Tokenizer):
             attention_mask = attention_mask.to(device)
 
             # forward pass
-            logits = model(input_ids=input_ids, mask=attention_mask)
+            logits = model(x=input_ids, mask=attention_mask)
+
+            # shift for next-token prediction: logits[t] predicts labels[t+1]
+            shift_logits = logits[:, :-1, :].contiguous()
+            shift_labels = labels[:, 1:].contiguous()
 
             # compute loss
-            loss = loss_fn(logits.view(-1, tokenizer.get_vocab_size()), labels.view(-1))
+            loss = loss_fn(shift_logits.view(-1, tokenizer.get_vocab_size()), shift_labels.view(-1))
             test_loss += loss.item()
 
     # average over batches

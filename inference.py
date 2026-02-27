@@ -78,12 +78,22 @@ class DialogueSystem:
                 )  # combine padding and causal masks
 
                 # forward pass
-                logits = self.model(input_ids, attention_mask=attention_mask)
+                logits = self.model(x=input_ids, mask=attention_mask)
                 next_token_logits = logits[:, -1, :]
 
-                # greedy decoding: pick the token with highest probability
-                next_token_id = torch.argmax(next_token_logits, dim=-1)
-                next_token_id = next_token_id.unsqueeze(0)  # add batch dimension
+                # # greedy decoding: pick the token with highest probability
+                # next_token_id = torch.argmax(next_token_logits, dim=-1)
+
+                # decode with top-k sampling
+                top_k = 50
+                values, indices = torch.topk(next_token_logits, top_k, dim=-1)  # (1, top_k)
+                probs = torch.softmax(values, dim=-1)
+
+                # sample: torch.multinomial expects 2D tensor (batch, classes)
+                sampled = torch.multinomial(probs, 1)  # (1,1)
+
+                # pick the actual token ids
+                next_token_id = indices.gather(-1, sampled)  # (1,1)
 
                 # append
                 input_ids = torch.cat([input_ids, next_token_id], dim=1)
@@ -95,21 +105,31 @@ class DialogueSystem:
         # decode generated token ids to text
         list_ids = input_ids.squeeze(0).tolist()  # remove batch dimension
 
-        # remove special tokens from the generated sequence
-        cleaned_ids = []
+        # find SEP positions
+        sep_positions = [i for i, t in enumerate(list_ids) if t == self.sep_id]
 
-        for token_id in list_ids:
-            if token_id in (
-                self.bos_id,
-                self.pad_id,
-                self.sep_id,
-            ):  # unknown token still has semantic meaning, do not skip it
-                continue  # skip BOS, PAD, and SEP tokens
-            if token_id == self.eos_id:
-                break  # stop at EOS token
-            cleaned_ids.append(token_id)
+        first_sep = sep_positions[0]
+        second_sep = sep_positions[1]
 
-        # decode cleaned token ids to text
-        generated_text = self.tokenizer.decode(cleaned_ids)
+        # extract token groups
+        context_ids = list_ids[1:first_sep]                     # after BOS until SEP1
+        prompt_ids  = list_ids[first_sep+1:second_sep]          # after SEP1 until SEP2
+        response_ids = []
 
-        return generated_text
+        # everything after SEP2 until EOS
+        for tid in list_ids[second_sep+1:]:
+            if tid == self.eos_id:
+                break
+            response_ids.append(tid)
+
+        # decode
+        ctx = self.tokenizer.decode(context_ids)
+        pr  = self.tokenizer.decode(prompt_ids)
+        rsp = self.tokenizer.decode(response_ids)
+
+        # clean BPE artifacts
+        ctx = ctx.replace("Ġ", "")
+        pr  = pr.replace("Ġ", "")
+        rsp = rsp.replace("Ġ", "")
+
+        return ctx, pr, rsp

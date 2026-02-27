@@ -22,7 +22,7 @@ model_config.eval_ratio = (
 # 3. TOKENIZER CONFIG
 model_config.tokenizer_strategy = "subword-level"  # word-level or subword-level
 model_config.pre_tokenizer_strategy = "byte-level"  # whitespace or byte-level
-model_config.vocab_size = 50000  # max vocabulary size
+model_config.vocab_size = 30000  # max vocabulary size
 model_config.min_frequency = 2  # minimum number of times a token must appear in the training corpus to be added to vocab
 model_config.tokenizer_filename = "tokenizer.json"
 model_config.special_tokens = {
@@ -33,7 +33,7 @@ model_config.special_tokens = {
     "separator": "[SEP]",
 }  # special tokens
 model_config.force_retrain_tokenizer = (
-    True  # retrain a tokenizer even the tokenizer already exist
+    False  # retrain a tokenizer even the tokenizer already exist
 )
 
 # 4. MODEL CONFIG
@@ -50,14 +50,16 @@ model_config.d_model = 256  # model dimension (dim of the vector embedding)
 model_config.d_ff = 1024  # dim of the feed forward block (4 * d_model)
 model_config.dropout = 0.1  # model dropout rate
 model_config.norm_strategy = "RMSNorm"  # normalization strategy (RMSNorm or LayerNorm)
-model_config.estimated_seq_len = 200  # estimation for sequence length (max model input+output capacity during inference)
+model_config.max_seq_truncation = 200 # maximum input sequence, anything longer will be truncanated and immediately ended with EOS
+model_config.estimated_seq_len = 500  # estimation for sequence length (max model input+output capacity during inference)
 
 # 5. TRAINING CONFIG
 # training loop
+model_config.num_workers = 0 # dataloader num workers
 model_config.batch_size = 16  # train batch size
 model_config.num_epochs = 30  # train epochs
 model_config.lr = 0.0001  # learning rate
-model_config.weight_decay = 0.1  # optimizer weight decay
+model_config.weight_decay = 0.01  # optimizer weight decay
 model_config.cross_entropy_ignore_index = -100  # ignore index for cross entropy loss
 model_config.label_smoothing = 0.1  # label smoothing factor for cross entropy loss
 model_config.lr_warmup_percentage = (

@@ -30,6 +30,9 @@ class DialogueDataset(Dataset):
         self.sep_id = tokenizer.token_to_id(special_tokens_dict["separator"])
         self.pad_id = tokenizer.token_to_id(special_tokens_dict["padding"])
 
+        # max sequence length (truncate to prevent OOM)
+        self.max_seq_len = config["max_seq_truncation"]
+
         # ignore index
         self.ignore_index = config["cross_entropy_ignore_index"]
 
@@ -38,7 +41,7 @@ class DialogueDataset(Dataset):
 
     def __getitem__(self, idx):
         sample = self.data[idx]
-        context = sample.get("context", "") # empty if context is not available
+        context = sample.get("context", "")  # empty if context is not available
         prompt = sample["prompt"]
         response = sample["utterance"]
 
@@ -57,6 +60,10 @@ class DialogueDataset(Dataset):
             + response_ids
             + [self.eos_id]
         )
+
+        # truncate to max_seq_len to prevent OOM on long sequences
+        if len(tokens) > self.max_seq_len:
+            tokens = tokens[: self.max_seq_len - 1] + [self.eos_id]
 
         input_ids = torch.tensor(tokens, dtype=torch.long)
 
@@ -206,31 +213,44 @@ def get_dataloaders(config):
     # create collate_fn
     collate_fn = create_collate_fn(config, tokenizer)
 
+    num_workers = config["num_workers"]
+
     # dataloader
     train_dl = DataLoader(
         train_ds,
         batch_size,
         shuffle=True,
-        num_workers=4,
+        num_workers=num_workers,
         collate_fn=collate_fn,
         pin_memory=True,
     )
     val_dl = DataLoader(
         val_ds,
         batch_size=val_test_batch_size,
-        num_workers=4,
+        num_workers=num_workers,
         collate_fn=collate_fn,
         pin_memory=True,
     )
     test_dl = DataLoader(
         test_ds,
         batch_size=val_test_batch_size,
-        num_workers=4,
+        num_workers=num_workers,
         collate_fn=collate_fn,
         pin_memory=True,
     )
 
     device = config["device"]
+
+    # max input sequence length
+    lengths = [len(sample["input_ids"]) for sample in train_ds]
+
+    max_len = max(lengths)
+    min_len = min(lengths)
+    avg_len = sum(lengths) / len(lengths)
+
+    print(f"max input seq length: {max_len}")
+    print(f"min input seq length: {min_len}")
+    print(f"avg seq length: {avg_len:.2f}")
 
     return (
         DeviceDataLoader(train_dl, device),

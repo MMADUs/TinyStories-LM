@@ -200,7 +200,6 @@ class TrainingCallback:
                     k: v.state_dict() if hasattr(v, "state_dict") else v
                     for k, v in optimizer_dict.items()
                 }
-            print(checkpoint_dict)
             # save checkpoint
             self.checkpoint.step(monitor_value, checkpoint_dict)
 

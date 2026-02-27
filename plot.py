@@ -1,27 +1,44 @@
 # Copyright 2025-2026 Muhammad Nizwa. All rights reserved.
 
+import numpy as np
 import matplotlib.pyplot as plt
 
-def line_plot(x1, x2, x1_label="X1", x2_label="X2"):
-    """
-    Plots a simple figure with two horizontal lines at x1 and x2 values.
 
-    Args:
-    - x1 (float): first value to plot
-    - x2 (float): second value to plot
-    - x1_label (str): label for x1
-    - x2_label (str): label for x2
-    """
-    plt.figure(figsize=(6, 4))
-    
-    # draw lines
-    plt.axhline(y=x1, color="green", linestyle="--", linewidth=1, label=f"{x1_label}: {x1:.4f}")
-    plt.axhline(y=x2, color="blue", linestyle="--", linewidth=1, label=f"{x2_label}: {x2:.4f}")
-    
-    # grid and labels
-    plt.grid(True, linestyle="--", alpha=0.6)
-    plt.xlabel("X-axis")
-    plt.ylabel("Value")
-    plt.title("Comparison of Values")
+def plot_loss(history):
+    plt.figure(figsize=(8, 5))
+    best_epoch = np.argmin(history["val_loss"])
+    plt.axvline(
+        x=best_epoch,
+        color="green",
+        linestyle="--",
+        linewidth=1,
+        label=f"Best Epoch ({np.min(history["val_loss"]):.4f} Val Loss)",
+    )
+    plt.grid(True, linestyle="--", linewidth=0.6, alpha=0.8)
+    plt.plot(history["train_loss"], label="Train Loss", color="red")
+    plt.plot(history["val_loss"], label="Val Loss", color="orange")
+    plt.xlabel("Epoch")
+    plt.ylabel("Loss")
+    plt.title(f"Training Loss")
+    plt.legend()
+    plt.show()
+
+
+def plot_perplexity(history):
+    plt.figure(figsize=(8, 5))
+    best_epoch = np.argmin(history["val_perplexity"])
+    plt.axvline(
+        x=best_epoch,
+        color="green",
+        linestyle="--",
+        linewidth=1,
+        label=f"Best Epoch ({np.min(history["val_perplexity"]):.4f} Perplexity)",
+    )
+    plt.grid(True, linestyle="--", linewidth=0.6, alpha=0.8)
+    plt.plot(history["train_perplexity"], label="Train PPL", color="blue")
+    plt.plot(history["val_perplexity"], label="Val PPL", color="green")
+    plt.xlabel("Epoch")
+    plt.ylabel("Perplexity")
+    plt.title(f"Perplexity Metrics")
     plt.legend()
     plt.show()
