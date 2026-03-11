@@ -1,3 +1,5 @@
 .output
 __pycache__
+config/__pycache__
 .vscode
+.archive
