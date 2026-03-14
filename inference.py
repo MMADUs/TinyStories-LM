@@ -3,6 +3,7 @@
 import torch
 from pathlib import Path
 from tokenizers import Tokenizer
+from tokenizers.decoders import ByteLevel as ByteLevelDecoder
 
 from model import build_model, get_attn_mask
 
@@ -18,12 +19,8 @@ class Generator:
     - context: initial dialogue context to prime the model with (optional)
     """
 
-    def __init__(self, config, version, context):
-        self.version = version
-        self.context = context
-
+    def __init__(self, config, version, load_from_epoch):
         self.device = config["device"]
-        self.max_len = config["estimated_seq_len"]
 
         output_dir = Path(config["output_dir_path"])
 
@@ -33,12 +30,23 @@ class Generator:
 
         self.tokenizer = Tokenizer.from_file(str(tokenizer_path))
 
-        # load model checkpoint from disk
-        ckpt_filename = config["pretraining"]["model_ckpt_filename"].format(version)
+        # TODO: this is temporary, should be removed soon when tokenizer is retrained
+        self.tokenizer.decoder = ByteLevelDecoder()
+
+        filename = config["pretraining"]["model_ckpt_filename"].format(
+            version
+        )  # base filename
+
+        ckpt_filename = f"{filename}_epoch_{load_from_epoch}"  # epoch filename
+        ckpt_filename = (
+            ckpt_filename + config["pretraining"]["ckpt_format"]
+        )  # full filename with format
         ckpt_path = output_dir / ckpt_filename
 
+        print("loading model from:", ckpt_path)
+
         checkpoint = torch.load(ckpt_path)
-        model_state = checkpoint["model"]["decoder"]
+        model_state = checkpoint["model"]
 
         self.model = build_model(config, self.tokenizer)
         self.model.load_state_dict(model_state)
@@ -53,68 +61,91 @@ class Generator:
         self.sep_id = self.tokenizer.token_to_id(special_tokens_dict["separator"])
         self.pad_id = self.tokenizer.token_to_id(special_tokens_dict["padding"])
 
-    def generate(self) -> str:
-        # encode context and prompt
-        ctx_ids = self.tokenizer.encode(self.context).ids if self.context else []
+    def generate(
+        self,
+        context: str = None,
+        max_new_tokens: int = 200,
+        temperature: float = 1.0,
+        top_k: int = 50,
+        top_p: float = 0.9,
+    ) -> str:
+        ctx_ids = self.tokenizer.encode(context).ids if context is not None else []
 
-        # concatenate full sequence: [BOS] context
+        # initalize input_ids with BOS + init_context
         input_ids = [self.bos_id] + ctx_ids
 
-        input_ids = torch.tensor(input_ids, dtype=torch.long, device=self.device)
-        input_ids = input_ids.unsqueeze(0)  # add batch dimension
+        input_ids = torch.tensor(
+            input_ids, dtype=torch.long, device=self.device
+        ).unsqueeze(0)
 
         with torch.no_grad():
-            while input_ids.size(1) < self.max_len:
-                # attention mask
+            for _ in range(max_new_tokens):
                 attention_mask = get_attn_mask(input_ids, self.pad_id).to(self.device)
-
-                # forward pass
                 logits = self.model(x=input_ids, mask=attention_mask)
-                next_token_logits = logits[:, -1, :]
+                next_token_logits = logits[:, -1, :]  # (1, vocab_size)
 
-                # # greedy decoding: pick the token with highest probability
-                # next_token_id = torch.argmax(next_token_logits, dim=-1)
+                # apply temperature
+                next_token_logits = next_token_logits / temperature
 
-                # decode with top-k sampling
-                top_k = 50
-                values, indices = torch.topk(
-                    next_token_logits, top_k, dim=-1
-                )  # (1, top_k)
-                probs = torch.softmax(values, dim=-1)
+                # top-k filtering
+                if top_k > 0:
+                    values, indices = torch.topk(next_token_logits, top_k, dim=-1)
+                    filtered = torch.full_like(next_token_logits, float("-inf"))
+                    filtered.scatter_(-1, indices, values)
+                    next_token_logits = filtered
 
-                # sample: torch.multinomial expects 2D tensor (batch, classes)
-                sampled = torch.multinomial(probs, 1)  # (1,1)
+                # top-p (nucleus) filtering
+                if top_p > 0.0:
+                    sorted_logits, sorted_indices = torch.sort(
+                        next_token_logits, descending=True
+                    )
+                    cumulative_probs = torch.cumsum(
+                        torch.softmax(sorted_logits, dim=-1), dim=-1
+                    )
+                    # remove tokens with cumulative prob above threshold
+                    sorted_indices_to_remove = (
+                        cumulative_probs - torch.softmax(sorted_logits, dim=-1) > top_p
+                    )
+                    sorted_logits[sorted_indices_to_remove] = float("-inf")
+                    next_token_logits = sorted_logits.scatter(
+                        -1, sorted_indices, sorted_logits
+                    )
 
-                # pick the actual token ids
-                next_token_id = indices.gather(-1, sampled)  # (1,1)
+                # sample
+                probs = torch.softmax(next_token_logits, dim=-1)
+                next_token_id = torch.multinomial(probs, 1)
 
                 # append
                 input_ids = torch.cat([input_ids, next_token_id], dim=1)
 
-                # stop if EOS token reached
+                # stop if EOS is generated
                 if next_token_id.item() == self.eos_id:
                     break
 
-        # decode generated token ids to text
-        list_ids = input_ids.squeeze(0).tolist()  # remove batch dimension
+        # decode
+        list_ids = input_ids.squeeze(0).tolist()
 
-        # remove special tokens from the generated sequence
         cleaned_ids = []
 
         for token_id in list_ids:
-            if token_id in (
-                self.bos_id,
-                self.pad_id,
-                self.sep_id,
-            ):  # unknown token still has semantic meaning, do not skip it
-                continue  # skip BOS, PAD, and SEP tokens
+            if token_id in (self.bos_id, self.pad_id, self.sep_id):
+                continue
             if token_id == self.eos_id:
-                break  # stop at EOS token
+                break
             cleaned_ids.append(token_id)
 
-        # decode cleaned token ids to text
         generated_text = self.tokenizer.decode(cleaned_ids)
-        generated_text = generated_text.replace("Ġ", "")
-        generated_text = generated_text.replace("Ċ", "")
 
-        return generated_text
+        cleaned_text = (
+            generated_text.replace(" ,", ",")
+            .replace(" .", ".")
+            .replace(" !", "!")
+            .replace(" ?", "?")
+            .replace(" '", "'")
+            .replace(" \n", "\n")
+            .replace("Ġ", " ")
+            .replace("Ċ", "\n")
+            .strip()
+        )
+
+        return cleaned_text

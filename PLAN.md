@@ -1,4 +1,5 @@
-# 1. find a text corpus with an average of 10-50M tokens (total token = avg row token * total row in a split)
-# 2. rebuild torch dataset and preprocessing for corpus (just feed the training loop the text)
-# 3. make sure that training loop will shift the target once using the original text (next token prediction)
-# 4. i need to figure out how the inference result would looked like
+# 1. setup and training v2 = 7-8 hours of training (1 epoch, 19M config)
+# 2. prepare supervised training dataset + preprocessing pipeline
+# 3. setup multiple inference strategy (argmax & top-k, idk else)
+# 4. improve model  (flash attention, MoE, simpler FFN, hyperparams)
+# 5. save epoch metrics to checkpoint, make checkpoint more verbose for large model, save scheduler state, remove old callbacks (basically new checkpoint callbacks)

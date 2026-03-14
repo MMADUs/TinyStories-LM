@@ -21,6 +21,9 @@ class InputEmbedding(nn.Module):
         self.vocab_size = vocab_size
 
         self.embedding = nn.Embedding(num_embeddings=vocab_size, embedding_dim=d_model)
+    
+    def get_weights(self):
+        return self.embedding.weight
 
     def forward(self, x):
         # (batch, seq_len) --> (batch, seq_len, d_model)
@@ -353,8 +356,18 @@ class LMDecoder(nn.Module):
                 for _ in range(num_layers)
             ]
         )
-        self.norm = LayerNormalization(d_model)  # final layer normalization
+
+        # final norm layer
+        if norm_strategy == "RMSNorm":
+            self.norm = RMSNorm(d_model)
+        elif norm_strategy == "LayerNorm":
+            self.norm = LayerNormalization(d_model)
+        else:
+            raise ValueError(f"invalid normalization strategy: {norm_strategy}")
+
         self.proj = nn.Linear(d_model, vocab_size, bias=False)  # vocab projection
+
+        self.proj.weight = self.embedding.get_weights() # weight tying
 
     def forward(self, x, mask):
         # token to embedding

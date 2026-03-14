@@ -4,7 +4,7 @@ from easydict import EasyDict
 
 from config.lm_v1_19M import _19M_config as default_model_config
 from config.dataset import dataset_config, tokenizer_config
-from config.training import training_config, pretraining_config
+from config.training import sft_config, pretraining_config
 
 
 def load_config(model_config=default_model_config):
@@ -15,7 +15,7 @@ def load_config(model_config=default_model_config):
     shared.update(tokenizer_config)
     # seperable training
     shared["pretraining"] = pretraining_config
-    shared["training"] = training_config
+    shared["finetuning"] = sft_config
     # model config
     shared.update(model_config)
     return shared

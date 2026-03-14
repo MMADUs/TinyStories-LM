@@ -21,11 +21,6 @@ dataset_config.eval_ratio = (
 
 dataset_config.num_workers = 0  # dataloader num workers
 
-# most critical parameter during training
-# maximum input sequence, anything longer will be truncanated and immediately ended with EOS
-# number is taken from the avg of the seq len from the entire corpus
-dataset_config.max_seq_truncation = 850  
-
 
 ####################
 # tokenizer config #
@@ -35,7 +30,7 @@ tokenizer_config = EasyDict(__name__="Tokenizer Configuration")
 
 tokenizer_config.tokenizer_strategy = "subword-level"  # word-level or subword-level
 tokenizer_config.pre_tokenizer_strategy = "byte-level"  # whitespace or byte-level
-tokenizer_config.vocab_size = 30000  # max vocabulary size
+tokenizer_config.vocab_size = 20000  # max vocabulary size
 tokenizer_config.min_frequency = 2  # minimum number of times a token must appear in the training corpus to be added to vocab
 tokenizer_config.tokenizer_filename = "tokenizer.json"
 tokenizer_config.special_tokens = {
@@ -44,6 +39,15 @@ tokenizer_config.special_tokens = {
     "begin": "[BOS]",
     "end": "[EOS]",
     "separator": "[SEP]",
+    # sft tokens
+    "features_start": "<features>",
+    "features_end": "</features>",
+    "words_start": "<words>",
+    "words_end": "</words>",
+    "summary_start": "<summary>",
+    "summary_end": "</summary>",
+    "story_start": "<story>",
+    "story_end": "</story>",
 }  # special tokens
 tokenizer_config.force_retrain_tokenizer = (
     False  # retrain a tokenizer even the tokenizer already exist

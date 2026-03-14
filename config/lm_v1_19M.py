@@ -11,12 +11,11 @@ _19M_config.device = (
 )  # torch device
 _19M_config.init_std = 0.02  # parameter initialization standard deviation
 
-_19M_config.num_layers = 4  # num of decoder layer (model depth)
+_19M_config.num_layers = 6  # num of decoder layer (model depth)
 _19M_config.num_heads = (
-    4  # num of attention heads (must be divisor of d_model: d_model // h)
+    8  # num of attention heads (must be divisor of d_model: d_model // h)
 )
 _19M_config.d_model = 256  # model dimension (dim of the vector embedding)
 _19M_config.d_ff = 1024  # dim of the feed forward block (2-4 * d_model)
 _19M_config.dropout = 0.1  # model dropout rate
 _19M_config.norm_strategy = "RMSNorm"  # normalization strategy (RMSNorm or LayerNorm)
-_19M_config.estimated_seq_len = 2000  # estimation for sequence length (max model input+output capacity during inference)

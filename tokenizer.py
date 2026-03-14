@@ -7,6 +7,7 @@ from tokenizers.models import WordLevel, BPE
 from tokenizers.trainers import WordLevelTrainer, BpeTrainer
 from tokenizers.pre_tokenizers import Whitespace, ByteLevel
 from tokenizers.processors import ByteLevel as ByteLevelProcessor
+from tokenizers.decoders import ByteLevel as ByteLevelDecoder
 
 
 def extract_from_corpus(ds):
@@ -71,6 +72,7 @@ def get_or_train_tokenizer(config, ds) -> Tokenizer:
 
         if isinstance(pre_tokenizer, ByteLevel):
             tokenizer.post_processor = ByteLevelProcessor()
+            tokenizer.decoder = ByteLevelDecoder()
 
         trainer = BpeTrainer(
             vocab_size=max_vocab_size,
