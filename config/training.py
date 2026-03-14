@@ -10,7 +10,7 @@ pretraining_config = EasyDict(__name__="Pre-training Configuration")
 
 # most critical parameter during training
 # maximum input token sequence, anything longer will be truncanated and immediately ended with EOS
-# number is taken from the avg of the seq len from the entire corpus
+# number is taken from the avg of the tokenized seq len from the entire corpus
 pretraining_config.max_seq_truncation = 512  
 
 pretraining_config.batch_size = 8  # train batch size
@@ -52,7 +52,7 @@ sft_config = EasyDict(__name__="Supervised Fine-Tuning Configuration")
 
 # most critical parameter during training
 # maximum input token sequence, anything longer will be truncanated and immediately ended with EOS
-# number is taken from the avg of the seq len from the entire corpus
+# number is taken from the avg of the tokenized seq len from the entire corpus
 sft_config.max_seq_truncation = 850  
 
 sft_config.batch_size = 16  # train batch size

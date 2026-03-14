@@ -5,13 +5,12 @@ from pathlib import Path
 from tokenizers import Tokenizer
 from tokenizers.decoders import ByteLevel as ByteLevelDecoder
 
-from model import build_model, get_attn_mask
+from src.model import build_model, get_attn_mask
 
 
-class Generator:
+class CausalGenerator:
     """
-    The generator system class encapsulates the model and tokenizer for inference.
-    Provides a generate method to create text based on the provided context.
+    The causal generation class for next token prediction and autoregressive generation.
 
     Args:
     - config: model configuration dictionary

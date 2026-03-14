@@ -10,11 +10,12 @@ from tqdm import tqdm
 from torch.amp import autocast, GradScaler
 from transformers import get_cosine_schedule_with_warmup
 
-from model import build_model, get_attn_mask
-from utils import time_formatter, set_random_seed, get_last_checkpoint_state
+from src.model import get_attn_mask
+from src.utils import time_formatter, set_random_seed, calculate_scheduler_steps
+from src.serialization import get_or_build_state, save_checkpoint_state
 
 
-def pretrain_model(
+def finetune_model(
     config,
     train_dl,
     val_dl,
@@ -24,7 +25,7 @@ def pretrain_model(
     load_from_epoch: Optional[int] = None,
 ) -> dict:
     """
-    The pretraining loop.
+    The fine-tuning loop.
 
     Args:
     - config: model configuration dictionary
@@ -38,51 +39,25 @@ def pretrain_model(
     # set random seed for reproducibility
     set_random_seed(config["random_seed"])
 
-    pretrain_config = config["pretraining"]
+    finetune_config = config["finetuning"]
     device = config["device"]
-
     pad_id = tokenizer.token_to_id(config["special_tokens"]["padding"])
-
-    output_dir = Path(config["output_dir_path"])
-    filename = pretrain_config["model_ckpt_filename"].format(version)  # base filename
-
-    ckpt_filename = f"{filename}_epoch_{load_from_epoch}"  # epoch filename
-    ckpt_filename = (
-        ckpt_filename + pretrain_config["ckpt_format"]
-    )  # full filename with format
-    ckpt_path = output_dir / ckpt_filename
 
     init_epoch = 0
 
     print("preparing training...")
 
     # initialize model and optimizer
-    if initial_train or not ckpt_path.exists() or load_from_epoch is None:
-        print("No checkpoint found, start initial training")
+    model, optimizer, additional_epochs = get_or_build_state(
+        config, finetune_config, tokenizer, version, initial_train, load_from_epoch
+    )
 
-        model = build_model(config, tokenizer)
-        model = model.to(device)
-        # model = torch.compile(model)
-
-        lr = pretrain_config["lr"]
-        weight_decay = pretrain_config["weight_decay"]
-
-        optimizer = torch.optim.AdamW(
-            model.parameters(), lr=lr, weight_decay=weight_decay, fused=True
-        )
-    else:
-        print(f"Checkpoint found at {ckpt_path}, loading checkpoint for training")
-
-        model, optimizer, last_epoch = get_last_checkpoint_state(
-            config, pretrain_config, tokenizer, version, load_from_epoch
-        )
-        init_epoch = last_epoch + 1
+    init_epoch += additional_epochs
 
     # learning rate scheduler: linear warmup + cosine annealing
-    lr_warmup_percentage = pretrain_config["lr_warmup_percentage"]
-    remaining_epochs = pretrain_config["num_epochs"] - init_epoch
-    num_training_steps = len(train_dl) * remaining_epochs
-    num_warmup_steps = int(lr_warmup_percentage * num_training_steps)
+    num_training_steps, num_warmup_steps = calculate_scheduler_steps(
+        init_epoch, finetune_config, len(train_dl)
+    )
 
     scheduler = get_cosine_schedule_with_warmup(
         optimizer,
@@ -91,15 +66,12 @@ def pretrain_model(
     )
 
     # criterion
-    label_smoothing = pretrain_config["label_smoothing"]
-    cross_entropy_ignore_index = pretrain_config["cross_entropy_ignore_index"]
-
     loss_fn = torch.nn.CrossEntropyLoss(
-        ignore_index=cross_entropy_ignore_index,  # ignore index for padding
-        label_smoothing=label_smoothing,  # label smoothing factor
+        ignore_index=finetune_config["cross_entropy_ignore_index"],
+        label_smoothing=finetune_config["label_smoothing"],
     )
 
-    # # gradient scaler
+    # gradient scaler
     # scaler = GradScaler()
 
     history = {
@@ -113,7 +85,7 @@ def pretrain_model(
 
     start_time = time.time()
 
-    for epoch in range(init_epoch, pretrain_config["num_epochs"]):
+    for epoch in range(init_epoch, finetune_config["num_epochs"]):
         epoch_start = time.time()
         torch.cuda.empty_cache()
 
@@ -121,7 +93,7 @@ def pretrain_model(
 
         global_train_loss = 0.0
         train_loss = 0.0
-        append_train_history_step = pretrain_config["append_train_history_step"]
+        append_train_history_step = finetune_config["append_train_history_step"]
         train_step = 0
 
         batch_iter = tqdm(train_dl, desc=f"epoch {epoch+1}")
@@ -129,6 +101,8 @@ def pretrain_model(
         for batch in batch_iter:
             # input
             input_ids = batch["input_ids"].to(device)
+            labels = batch["labels"].to(device)
+
             attention_mask = get_attn_mask(input_ids, pad_id)
 
             # reset optimizer gradient
@@ -140,10 +114,8 @@ def pretrain_model(
 
                 # shift for next-token prediction: logits[t] predicts labels = input_ids[t+1]
                 shift_logits = logits[:, :-1, :].contiguous()
-                shift_labels = input_ids[:, 1:].contiguous()
+                shift_labels = labels[:, 1:].contiguous()
 
-                # replace PAD tokens with ignore_index
-                shift_labels[shift_labels == pad_id] = cross_entropy_ignore_index
                 # compute loss
                 loss = loss_fn(
                     shift_logits.view(-1, tokenizer.get_vocab_size()),
@@ -155,21 +127,21 @@ def pretrain_model(
             loss.backward()
             # gradient clipping
             torch.nn.utils.clip_grad_norm_(
-                model.parameters(), pretrain_config["clip_grad_max_norm"]
+                model.parameters(), finetune_config["clip_grad_max_norm"]
             )
             # step optimizer
             # scaler.step(optimizer)
             optimizer.step()
             # step scheduler
             scheduler.step()
-            # # update scaler
+            # update scaler
             # scaler.update()
 
             # add train loss
             train_loss += loss.item()
             global_train_loss += loss.item()
 
-            # show train info in tqdm
+            # show real-time train info in tqdm
             batch_iter.set_postfix({"loss": f"{loss.item():6.3f}"})
 
             train_step += 1
@@ -183,18 +155,21 @@ def pretrain_model(
                 history["train_perplexity"].append(train_ppl)
                 # reset
                 train_loss = 0.0
+                train_step = 0
 
         model.eval()
 
         global_val_loss = 0.0
         val_loss = 0.0
-        append_val_history_step = pretrain_config["append_val_history_step"]
+        append_val_history_step = finetune_config["append_val_history_step"]
         val_step = 0
 
         with torch.no_grad():
             for batch in tqdm(val_dl, desc=f"validation"):
                 # input
                 input_ids = batch["input_ids"].to(device)
+                labels = batch["labels"].to(device)
+
                 attention_mask = get_attn_mask(input_ids, pad_id)
 
                 with autocast(device_type=str(device), dtype=torch.bfloat16):
@@ -203,10 +178,8 @@ def pretrain_model(
 
                     # shift for next-token prediction: logits[t] predicts labels = input_ids[t+1]
                     shift_logits = logits[:, :-1, :].contiguous()
-                    shift_labels = input_ids[:, 1:].contiguous()
+                    shift_labels = labels[:, 1:].contiguous()
 
-                    # replace PAD tokens with ignore_index
-                    shift_labels[shift_labels == pad_id] = cross_entropy_ignore_index
                     # compute loss
                     loss = loss_fn(
                         shift_logits.view(-1, tokenizer.get_vocab_size()),
@@ -228,7 +201,8 @@ def pretrain_model(
                     history["val_perplexity"].append(val_ppl)
                     # reset
                     val_loss = 0.0
-
+                    val_step = 0
+                    
         # overall loss in avg
         global_train_loss /= len(train_dl)
         global_val_loss /= len(val_dl)
@@ -246,22 +220,17 @@ def pretrain_model(
         )
 
         # checkpointing
-        ckpt_state_dict = {
-            "model": model.state_dict(),
-            "optimizer": optimizer.state_dict(),
-            "scheduler": scheduler.state_dict(),
-            "epoch": epoch,
-            "val_loss": global_val_loss,
-            "val_perplexity": val_ppl,
-        }
-
-        curr_ckpt = f"{filename}_epoch_{epoch+1}"  # epoch filename
-        curr_ckpt = (
-            curr_ckpt + pretrain_config["ckpt_format"]
-        )  # full filename with format
-        curr_ckpt_path = output_dir / curr_ckpt
-
-        torch.save(ckpt_state_dict, curr_ckpt_path)
+        save_checkpoint_state(
+            model,
+            optimizer,
+            scheduler,
+            epoch,
+            global_val_loss,
+            val_ppl,
+            config,
+            finetune_config,
+            version,
+        )
 
         print("\n")
 

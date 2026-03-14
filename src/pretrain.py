@@ -1,28 +1,31 @@
 # Copyright 2025-2026 Muhammad Nizwa. All rights reserved.
 
 import time
+from typing import Optional
 from pathlib import Path
 
 import numpy as np
 import torch
 from tqdm import tqdm
 from torch.amp import autocast, GradScaler
-from transformers import get_linear_schedule_with_warmup
+from transformers import get_cosine_schedule_with_warmup
 
-from model import build_model, get_attn_mask
-from utils import time_formatter, set_random_seed, get_last_checkpoint_state
+from src.model import get_attn_mask
+from src.utils import time_formatter, set_random_seed, calculate_scheduler_steps
+from src.serialization import get_or_build_state, save_checkpoint_state
 
 
-def finetune_model(
+def pretrain_model(
     config,
     train_dl,
     val_dl,
     tokenizer,
     version: str = "NA",
     initial_train: bool = True,
+    load_from_epoch: Optional[int] = None,
 ) -> dict:
     """
-    The fine-tuning loop.
+    The pretraining loop.
 
     Args:
     - config: model configuration dictionary
@@ -31,70 +34,45 @@ def finetune_model(
     - tokenizer: trained tokenizer
     - version: version string to identify the checkpoint file (default: "NA")
     - initial_train: whether to start training from scratch (default: True)
+    - load_from_epoch: epoch number to resume training from (default: None)
     """
     # set random seed for reproducibility
     set_random_seed(config["random_seed"])
 
-    finetune_config = config["finetuning"]
+    pretrain_config = config["pretraining"]
     device = config["device"]
-
     pad_id = tokenizer.token_to_id(config["special_tokens"]["padding"])
-
-    output_dir = Path(config["output_dir_path"])
-    ckpt_filename = (
-        finetune_config["model_ckpt_filename"].format(version)
-        + finetune_config["ckpt_format"]
-    )
-    ckpt_path = output_dir / ckpt_filename
 
     init_epoch = 0
 
-    # initialize model and optimizer
-    if initial_train or not ckpt_path.exists():
-        print("No checkpoint found, start initial training")
-
-        model = build_model(config, tokenizer)
-        model = model.to(device)
-
-        lr = finetune_config["lr"]
-        weight_decay = finetune_config["weight_decay"]
-
-        optimizer = torch.optim.AdamW(
-            model.parameters(), lr=lr, weight_decay=weight_decay
-        )
-    else:
-        print(f"Checkpoint found at {ckpt_path}, loading checkpoint for training")
-
-        model, optimizer, last_epoch = get_last_checkpoint_state(
-            config, finetune_config, tokenizer, version
-        )
-        init_epoch = last_epoch + 1
-
     print("preparing training...")
 
-    # warmup + linear decay learning rate scheduler
-    lr_warmup_percentage = finetune_config["lr_warmup_percentage"]
-    remaining_epochs = finetune_config["num_epochs"] - init_epoch
-    num_training_steps = len(train_dl) * remaining_epochs
-    num_warmup_steps = int(lr_warmup_percentage * num_training_steps)
+    # initialize model and optimizer
+    model, optimizer, additional_epochs = get_or_build_state(
+        config, pretrain_config, tokenizer, version, initial_train, load_from_epoch
+    )
 
-    scheduler = get_linear_schedule_with_warmup(
+    init_epoch += additional_epochs
+
+    # learning rate scheduler: linear warmup + cosine annealing
+    num_training_steps, num_warmup_steps = calculate_scheduler_steps(
+        init_epoch, pretrain_config, len(train_dl)
+    )
+
+    scheduler = get_cosine_schedule_with_warmup(
         optimizer,
         num_warmup_steps=num_warmup_steps,
         num_training_steps=num_training_steps,
     )
 
     # criterion
-    label_smoothing = finetune_config["label_smoothing"]
-    cross_entropy_ignore_index = finetune_config["cross_entropy_ignore_index"]
-
     loss_fn = torch.nn.CrossEntropyLoss(
-        ignore_index=cross_entropy_ignore_index,  # ignore index for padding
-        label_smoothing=label_smoothing,  # label smoothing factor
+        ignore_index=pretrain_config["cross_entropy_ignore_index"],
+        label_smoothing=pretrain_config["label_smoothing"],
     )
 
-    # gradient scaler
-    scaler = GradScaler()
+    # # gradient scaler
+    # scaler = GradScaler()
 
     history = {
         "train_loss": [],
@@ -107,7 +85,7 @@ def finetune_model(
 
     start_time = time.time()
 
-    for epoch in range(init_epoch, finetune_config["num_epochs"]):
+    for epoch in range(init_epoch, pretrain_config["num_epochs"]):
         epoch_start = time.time()
         torch.cuda.empty_cache()
 
@@ -115,7 +93,7 @@ def finetune_model(
 
         global_train_loss = 0.0
         train_loss = 0.0
-        append_train_history_step = finetune_config["append_train_history_step"]
+        append_train_history_step = pretrain_config["append_train_history_step"]
         train_step = 0
 
         batch_iter = tqdm(train_dl, desc=f"epoch {epoch+1}")
@@ -123,34 +101,44 @@ def finetune_model(
         for batch in batch_iter:
             # input
             input_ids = batch["input_ids"].to(device)
-            labels = batch["labels"].to(device)
-
             attention_mask = get_attn_mask(input_ids, pad_id)
 
             # reset optimizer gradient
-            optimizer.zero_grad()
+            optimizer.zero_grad(set_to_none=True)
 
-            with autocast(device_type=str(device)):
+            with autocast(device_type=str(device), dtype=torch.bfloat16):
                 # forward
                 logits = model(x=input_ids, mask=attention_mask)
 
-                # compute loss directly with labels
+                # shift for next-token prediction: logits[t] predicts labels = input_ids[t+1]
+                shift_logits = logits[:, :-1, :].contiguous()
+                shift_labels = input_ids[:, 1:].contiguous()
+
+                # replace PAD tokens with ignore_index
+                shift_labels[shift_labels == pad_id] = pretrain_config[
+                    "cross_entropy_ignore_index"
+                ]
+
+                # compute loss
                 loss = loss_fn(
-                    logits.view(-1, tokenizer.get_vocab_size()), labels.view(-1)
+                    shift_logits.view(-1, tokenizer.get_vocab_size()),
+                    shift_labels.view(-1),
                 )
 
             # scale gradient then backward
-            scaler.scale(loss).backward()
+            # scaler.scale(loss).backward()
+            loss.backward()
             # gradient clipping
             torch.nn.utils.clip_grad_norm_(
-                model.parameters(), finetune_config["clip_grad_max_norm"]
+                model.parameters(), pretrain_config["clip_grad_max_norm"]
             )
             # step optimizer
-            scaler.step(optimizer)
+            # scaler.step(optimizer)
+            optimizer.step()
             # step scheduler
             scheduler.step()
-            # update scaler
-            scaler.update()
+            # # update scaler
+            # scaler.update()
 
             # add train loss
             train_loss += loss.item()
@@ -170,29 +158,38 @@ def finetune_model(
                 history["train_perplexity"].append(train_ppl)
                 # reset
                 train_loss = 0.0
+                train_step = 0
 
         model.eval()
 
         global_val_loss = 0.0
         val_loss = 0.0
-        append_val_history_step = finetune_config["append_val_history_step"]
+        append_val_history_step = pretrain_config["append_val_history_step"]
         val_step = 0
 
         with torch.no_grad():
             for batch in tqdm(val_dl, desc=f"validation"):
                 # input
                 input_ids = batch["input_ids"].to(device)
-                labels = batch["labels"].to(device)
-
                 attention_mask = get_attn_mask(input_ids, pad_id)
 
-                with autocast(device_type=str(device)):
+                with autocast(device_type=str(device), dtype=torch.bfloat16):
                     # forward
                     logits = model(x=input_ids, mask=attention_mask)
 
-                    # compute loss directly with labels
+                    # shift for next-token prediction: logits[t] predicts labels = input_ids[t+1]
+                    shift_logits = logits[:, :-1, :].contiguous()
+                    shift_labels = input_ids[:, 1:].contiguous()
+
+                    # replace PAD tokens with ignore_index
+                    shift_labels[shift_labels == pad_id] = pretrain_config[
+                        "cross_entropy_ignore_index"
+                    ]
+
+                    # compute loss
                     loss = loss_fn(
-                        logits.view(-1, tokenizer.get_vocab_size()), labels.view(-1)
+                        shift_logits.view(-1, tokenizer.get_vocab_size()),
+                        shift_labels.view(-1),
                     )
 
                 # add val loss
@@ -210,7 +207,8 @@ def finetune_model(
                     history["val_perplexity"].append(val_ppl)
                     # reset
                     val_loss = 0.0
-
+                    val_step = 0
+                    
         # overall loss in avg
         global_train_loss /= len(train_dl)
         global_val_loss /= len(val_dl)
@@ -228,16 +226,17 @@ def finetune_model(
         )
 
         # checkpointing
-        ckpt_state_dict = {
-            "model": model.state_dict(),
-            "optimizer": optimizer.state_dict(),
-            "scheduler": scheduler.state_dict(),
-            "epoch": epoch,
-            "val_loss": global_val_loss,
-            "val_perplexity": val_ppl,
-        }
-
-        torch.save(ckpt_state_dict, ckpt_path)
+        save_checkpoint_state(
+            model,
+            optimizer,
+            scheduler,
+            epoch,
+            global_val_loss,
+            val_ppl,
+            config,
+            pretrain_config,
+            version,
+        )
 
         print("\n")
 

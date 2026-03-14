@@ -6,8 +6,8 @@ from datasets import load_dataset
 import torch
 from torch.utils.data import Dataset, DataLoader
 
-from tokenizer import get_or_train_tokenizer
-from utils import DeviceDataLoader
+from src.tokenizer import get_or_train_tokenizer
+from src.utils import DeviceDataLoader
 
 
 class TinyStoriesCorpus(Dataset):

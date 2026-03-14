@@ -20,6 +20,26 @@ def extract_from_corpus(ds):
             yield text
 
 
+def get_tokenizer(config) -> Tokenizer:
+    """
+    Get an existing tokenizer from disk.
+
+    Args:
+    - config: model configuration dictionary
+    """
+    output_dir = Path(config["output_dir_path"])
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    tokenizer_filename = config["tokenizer_filename"]
+    tokenizer_path = output_dir / tokenizer_filename
+
+    if Path(tokenizer_path).exists():
+        print("tokenizer found at:", tokenizer_path)
+        return Tokenizer.from_file(str(tokenizer_path))
+    else:
+        raise FileNotFoundError(f"tokenizer not found at {tokenizer_path}")
+
+
 def get_or_train_tokenizer(config, ds) -> Tokenizer:
     """
     Get an existing tokenizer from disk or train a new one from the given dataset.
@@ -37,10 +57,10 @@ def get_or_train_tokenizer(config, ds) -> Tokenizer:
     force_retrain = config["force_retrain_tokenizer"]
 
     if Path(tokenizer_path).exists() and not force_retrain:
-        print("tokenizer found, skipped training")
+        print("tokenizer found at:", tokenizer_path)
         return Tokenizer.from_file(str(tokenizer_path))
 
-    print("tokenizer not found, tokenizing corpus")
+    print("tokenizer not found, tokenizing corpus...")
 
     special_tokens_dict = config["special_tokens"]
     special_tokens_list = list(special_tokens_dict.values())

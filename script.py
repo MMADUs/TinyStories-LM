@@ -14,10 +14,10 @@ from config.lm_v1_19M import _19M_config as model_19M_params
 from config.lm_v1_40M import _40M_config as model_40M_params
 
 from config.utils import load_config
-from corpus import get_corpus_dataloaders
-from instruct import get_sft_dataloaders
-from pretrain import pretrain_model
-from finetune import finetune_model
+from src.corpus import get_corpus_dataloaders
+from src.instruct import get_sft_dataloaders
+from src.pretrain import pretrain_model
+from src.finetune import finetune_model
 
 
 def main():

@@ -2,14 +2,13 @@
 
 import os
 import random
-from pathlib import Path
 
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
 from torchinfo import summary
 
-from model import build_model
+from src.model import build_model
 
 
 def set_random_seed(seed: int):
@@ -26,54 +25,17 @@ def set_random_seed(seed: int):
     torch.backends.cudnn.benchmark = False
 
 
-def get_last_checkpoint_state(
-    config, train_config, tokenizer, version, load_from_epoch
-):
+def calculate_scheduler_steps(init_epoch, train_config, train_dl_length):
     """
-    Load the last checkpoint state for model and optimizer. This is used to resume training from the last checkpoint.
-
-    Args:
-    - config: model configuration dictionary
-    - train_config: training configuration dictionary
-    - tokenizer: trained tokenizer to build the model
-    - version: version string to identify the checkpoint file
-    - load_from_epoch: epoch number to resume training from (default: None)
+    Calculate the number of training steps and warmup steps for lr scheduler.
     """
-    device = config["device"]
+    lr_warmup_percentage = train_config["lr_warmup_percentage"]
+    remaining_epochs = train_config["num_epochs"] - init_epoch
 
-    output_dir = Path(config["output_dir_path"])
-    filename = train_config["model_ckpt_filename"].format(version)  # base filename
+    num_training_steps = train_dl_length * remaining_epochs
+    num_warmup_steps = int(lr_warmup_percentage * num_training_steps)
 
-    ckpt_filename = f"{filename}_epoch_{load_from_epoch}"  # epoch filename
-    ckpt_filename = (
-        ckpt_filename + train_config["ckpt_format"]
-    )  # full filename with format
-    ckpt_path = output_dir / ckpt_filename
-
-    checkpoint = torch.load(ckpt_path)
-    model_state = checkpoint["model"]
-    optimizer_state = checkpoint["optimizer"]
-    last_epoch = checkpoint["epoch"]
-
-    val_loss = checkpoint["val_loss"]
-    val_ppl = checkpoint["val_perplexity"]
-
-    print(
-        f"Checkpoint loaded from epoch {last_epoch+1} with val loss {val_loss:.4f} and val perplexity {val_ppl:.4f}"
-    )
-
-    model = build_model(config, tokenizer)
-    model.load_state_dict(model_state)
-    model = model.to(device)
-    # model = torch.compile(model)
-
-    lr = train_config["lr"]
-    weight_decay = train_config["weight_decay"]
-
-    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay, fused=True)
-    optimizer.load_state_dict(optimizer_state)
-
-    return model, optimizer, last_epoch
+    return num_training_steps, num_warmup_steps
 
 
 class DeviceDataLoader:

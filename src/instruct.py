@@ -6,8 +6,8 @@ from datasets import load_dataset
 import torch
 from torch.utils.data import Dataset, DataLoader
 
-from tokenizer import get_or_train_tokenizer
-from utils import DeviceDataLoader
+from src.tokenizer import get_tokenizer
+from src.utils import DeviceDataLoader
 
 
 def make_structured_data(data):
@@ -60,15 +60,27 @@ class TinyStoriesSFT(Dataset):
 
         # special token IDs
         special_tokens_dict = config["special_tokens"]
+
         self.bos_id = tokenizer.token_to_id(special_tokens_dict["begin"])
         self.eos_id = tokenizer.token_to_id(special_tokens_dict["end"])
-        self.sep_id = tokenizer.token_to_id(special_tokens_dict["separator"])
+
+        # conditioning special tokens
+        self.features_start = tokenizer.token_to_id(
+            special_tokens_dict["features_start"]
+        )
+        self.features_end = tokenizer.token_to_id(special_tokens_dict["features_end"])
+        self.words_start = tokenizer.token_to_id(special_tokens_dict["words_start"])
+        self.words_end = tokenizer.token_to_id(special_tokens_dict["words_end"])
+        self.summary_start = tokenizer.token_to_id(special_tokens_dict["summary_start"])
+        self.summary_end = tokenizer.token_to_id(special_tokens_dict["summary_end"])
+        self.story_start = tokenizer.token_to_id(special_tokens_dict["story_start"])
+        self.story_end = tokenizer.token_to_id(special_tokens_dict["story_end"])
 
         # max sequence length for truncation
-        self.max_seq_len = config["max_seq_truncation"]
+        self.max_seq_len = config["finetuning"]["max_seq_truncation"]
 
         # ignore index
-        self.ignore_index = config["finetune"]["cross_entropy_ignore_index"]
+        self.ignore_index = config["finetuning"]["cross_entropy_ignore_index"]
 
     def __len__(self):
         return len(self.data)
@@ -81,29 +93,65 @@ class TinyStoriesSFT(Dataset):
         story = item.get("story", "")
 
         # tokenize
-        # more special tokens needed to process features and words conditioning.
-        # eg: <features> ... </features>, <words> ... </words>
-        # so i will keep it optional for now.
-        _features_ids = self.tokenizer.encode(features).ids
-        _words_ids = self.tokenizer.encode(words).ids
+        features_ids = self.tokenizer.encode(features).ids
+        words_ids = self.tokenizer.encode(words).ids
         summary_ids = self.tokenizer.encode(summary).ids
         story_ids = self.tokenizer.encode(story).ids
 
-        # concatenate full sequence: [BOS] summary [SEP] story [EOS]
-        tokens = [self.bos_id] + summary_ids + [self.sep_id] + story_ids + [self.eos_id]
+        # concatenate full input sequence
+        tokens = (
+            [self.bos_id]  # [BOS]
+            + [self.features_start]  # <features>
+            # features ctx
+            + features_ids
+            + [self.features_end]  # </features>
+            + [self.words_start]  # <words>
+            # words ctx
+            + words_ids
+            + [self.words_end]  # </words>
+            + [self.summary_start]  # <summary>
+            # summary ctx
+            + summary_ids
+            + [self.summary_end]  # </summary>
+            + [self.story_start]  # <story>
+            # story to be predicted
+            + story_ids
+            + [self.story_end]  # </story>
+            + [self.eos_id]
+        )
+
+        # mask BOS until <story>
+        # prediction begins after <story>
+        prompt_tokens = (
+            [self.bos_id]
+            + [self.features_start]
+            + features_ids
+            + [self.features_end]
+            + [self.words_start]
+            + words_ids
+            + [self.words_end]
+            + [self.summary_start]
+            + summary_ids
+            + [self.summary_end]
+            + [self.story_start]
+        )
+
+        labels = (
+            [self.ignore_index] * len(prompt_tokens)  # masked
+            + story_ids  # predict
+            + [self.story_end]  # predict
+            + [self.eos_id]  # predict
+        )
 
         # truncate to max_seq_len to slice long seq
         if len(tokens) > self.max_seq_len:
             # slice and add EOS
             tokens = tokens[: self.max_seq_len - 1] + [self.eos_id]
+            labels = labels[: self.max_seq_len - 1] + [self.eos_id]
 
-        # mask BOS + summary + SEP with ignore_index, only predict story part
-        labels = (
-            [self.ignore_index]
-            * len([self.bos_id] + summary_ids + [self.sep_id])  # masked
-            + story_ids
-            + [self.eos_id]
-        )
+        assert len(tokens) == len(
+            labels
+        ), f"tokens {len(tokens)} != labels {len(labels)}"
 
         input_ids = torch.tensor(tokens, dtype=torch.long)
         labels = torch.tensor(labels, dtype=torch.long)
@@ -114,19 +162,12 @@ class TinyStoriesSFT(Dataset):
         }
 
 
-def create_collate_fn(config, tokenizer):
-    """
-    Function generator for the custom collate_fn dataloader.
-    """
-    padding = config["special_tokens"]["padding"]
-    pad_id = tokenizer.token_to_id(padding)
-    ignore_index = config["finetune"]["cross_entropy_ignore_index"]
+class CollateFn:
+    def __init__(self, pad_id, ignore_index):
+        self.pad_id = pad_id
+        self.ignore_index = ignore_index
 
-    # custom collate_fn to be passed to dataloader
-    def _collate_fn(batch: List[Dict]):
-        """
-        Custom collate_fn to pad variable length sequences in the batch to the same length.
-        """
+    def __call__(self, batch: List[Dict]):
         # get data from batch
         input_ids = [item["input_ids"] for item in batch]
         labels = [item["labels"] for item in batch]
@@ -147,8 +188,12 @@ def create_collate_fn(config, tokenizer):
 
         # we need to make all data has a fixed tensor size
         # so we expand tensor to max_len, fill the empty value with pad_value
-        input_ids = torch.stack([pad_tensor(t, pad_value=pad_id) for t in input_ids])
-        labels = torch.stack([pad_tensor(t, pad_value=ignore_index) for t in labels])
+        input_ids = torch.stack(
+            [pad_tensor(t, pad_value=self.pad_id) for t in input_ids]
+        )
+        labels = torch.stack(
+            [pad_tensor(t, pad_value=self.ignore_index) for t in labels]
+        )
 
         # dataloader output
         return {
@@ -156,10 +201,8 @@ def create_collate_fn(config, tokenizer):
             "labels": labels,
         }
 
-    return _collate_fn
 
-
-def get_sft_dataloaders(config):
+def get_sft_dataloaders(config, is_test=False):
     """
     Returns train and val SFT dataloaders.
 
@@ -176,8 +219,17 @@ def get_sft_dataloaders(config):
         config["hf_instruct"], split="validation", trust_remote_code=trust
     )
 
+    if is_test:
+        # for testing, we use a smaller subset of the data to speed up the process
+        ds_train = ds_train.select(range(5000))
+        ds_val = ds_val.select(range(2500))
+
+    # preprocessing
+    ds_train = make_structured_data(ds_train["text"])
+    ds_val = make_structured_data(ds_val["text"])
+
     # get tokenizer
-    tokenizer = get_or_train_tokenizer(config, ds_train)
+    tokenizer = get_tokenizer(config)
 
     # build dataset
     train_ds = TinyStoriesSFT(config, ds_train, tokenizer)
@@ -186,8 +238,13 @@ def get_sft_dataloaders(config):
     batch_size = config["finetuning"]["batch_size"]
     val_test_batch_size = max(1, batch_size // 2)
 
+    padding = config["special_tokens"]["padding"]
+    pad_id = tokenizer.token_to_id(padding)
+
+    ignore_index = config["finetuning"]["cross_entropy_ignore_index"]
+
     # create collate_fn
-    collate_fn = create_collate_fn(config, tokenizer)
+    collate_fn = CollateFn(pad_id, ignore_index)
 
     num_workers = config["num_workers"]
 
