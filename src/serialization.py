@@ -4,7 +4,7 @@ from pathlib import Path
 
 import torch
 
-from src.model import build_model
+from src.modules.decoder import build_model
 
 
 def get_checkpoint_path(config, stage_config, version, load_from_epoch):

@@ -2,7 +2,6 @@
 
 import time
 from typing import Optional, Literal
-from pathlib import Path
 
 import numpy as np
 import torch
@@ -10,7 +9,7 @@ from tqdm import tqdm
 from torch.amp import autocast, GradScaler
 from transformers import get_cosine_schedule_with_warmup
 
-from src.model import get_attn_mask
+from src.modules.utils import get_attn_mask
 from src.utils import time_formatter, set_random_seed, calculate_scheduler_steps
 from src.serialization import get_or_build_state, save_checkpoint_state
 

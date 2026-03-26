@@ -8,7 +8,7 @@ import torch
 from tokenizers import Tokenizer
 from tokenizers.decoders import ByteLevel as ByteLevelDecoder
 
-from src.model import build_model, get_attn_mask
+from src.modules.decoder import build_model
 from src.serialization import get_checkpoint_path
 
 
@@ -106,7 +106,7 @@ def next_word_prediction(
 
     ctx_ids = tokenizer.encode(text_input).ids if text_input is not None else []
 
-    # initalize input_ids with BOS + init_context
+    # initalize input_ids with [BOS] + init_context
     input_ids = [bos_id] + ctx_ids
 
     input_ids = torch.tensor(
@@ -179,17 +179,17 @@ def generate_story(
     summary_ids = tokenizer.encode(summary).ids if summary else []
 
     prompt_tokens = (
-        [bos_id]
-        + [features_start]
-        + features_ids
-        + [features_end]
-        + [words_start]
-        + words_ids
-        + [words_end]
-        + [summary_start]
-        + summary_ids
-        + [summary_end]
-        + [story_start]
+        [bos_id] # [BOS]
+        + [features_start] # <features>
+        + features_ids # features ctx
+        + [features_end] # </features>
+        + [words_start] # <words>
+        + words_ids # words ctx
+        + [words_end] # </words>
+        + [summary_start] # <summary>
+        + summary_ids # summary ctx
+        + [summary_end] # </summary>
+        + [story_start] # <story>
     )
 
     input_ids = torch.tensor(

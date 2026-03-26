@@ -18,4 +18,3 @@ _40M_config.num_heads = (
 _40M_config.d_model = 512  # model dimension (dim of the vector embedding)
 _40M_config.d_ff = 2048  # dim of the feed forward block (2-4 * d_model)
 _40M_config.dropout = 0.1  # model dropout rate
-_40M_config.norm_strategy = "RMSNorm"  # normalization strategy (RMSNorm or LayerNorm)

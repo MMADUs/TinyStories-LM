@@ -18,4 +18,3 @@ _19M_config.num_heads = (
 _19M_config.d_model = 256  # model dimension (dim of the vector embedding)
 _19M_config.d_ff = 1024  # dim of the feed forward block (2-4 * d_model)
 _19M_config.dropout = 0.1  # model dropout rate
-_19M_config.norm_strategy = "RMSNorm"  # normalization strategy (RMSNorm or LayerNorm)

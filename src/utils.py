@@ -8,7 +8,7 @@ import torch
 from torch.utils.data import DataLoader
 from torchinfo import summary
 
-from src.model import build_model
+from src.modules.decoder import build_model
 
 
 def set_random_seed(seed: int):

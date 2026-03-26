@@ -18,4 +18,3 @@ _9M_config.num_heads = (
 _9M_config.d_model = 128  # model dimension (dim of the vector embedding)
 _9M_config.d_ff = 512  # dim of the feed forward block (2-4 * d_model)
 _9M_config.dropout = 0.1  # model dropout rate
-_9M_config.norm_strategy = "RMSNorm"  # normalization strategy (RMSNorm or LayerNorm)
