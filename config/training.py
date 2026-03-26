@@ -53,9 +53,9 @@ sft_config = EasyDict(__name__="Supervised Fine-Tuning Configuration")
 # most critical parameter during training
 # maximum input token sequence, anything longer will be truncanated and immediately ended with EOS
 # number is taken from the avg of the tokenized seq len from the entire corpus
-sft_config.max_seq_truncation = 850  
+sft_config.max_seq_truncation = 512 
 
-sft_config.batch_size = 16  # train batch size
+sft_config.batch_size = 8  # train batch size
 
 # num epochs NEEDS to be adjusted when resuming training from a checkpoint.
 sft_config.num_epochs = 1  # 1 epoch = 1 runs

@@ -9,7 +9,7 @@ from easydict import EasyDict
 dataset_config = EasyDict(__name__="Dataset Configuration")
 
 dataset_config.hf_corpus = "roneneldan/TinyStories"  # pretraining corpus
-dataset_config.hf_instruct = "roneneldan/TinyStories-Instruct"  # supervised dataset
+dataset_config.hf_instruct = "roneneldan/TinyStoriesInstruct"  # supervised dataset
 dataset_config.trust_source = True  # MAKE SURE REMOTE SCRIPT ARE SAFE!
 
 dataset_config.test_ratio = (

@@ -16,15 +16,17 @@ from config.lm_v1_40M import _40M_config as model_40M_params
 from config.utils import load_config
 from src.corpus import get_corpus_dataloaders
 from src.instruct import get_sft_dataloaders
-from src.pretrain import pretrain_model
-from src.finetune import finetune_model
+from src.train import train_model
 
 
 def main():
     parser = argparse.ArgumentParser(description="trainer script arg parser")
 
     parser.add_argument(
-        "--model_size", choices=["9M", "19M", "40M"], required=True, help="model size to train"
+        "--model_size",
+        choices=["9M", "19M", "40M"],
+        required=True,
+        help="model size to train",
     )
     parser.add_argument(
         "--version", required=True, help="version name for the training run"
@@ -65,35 +67,30 @@ def main():
     # training
     if args.phase == "pretraining":
         train_dl, val_dl, tokenizer = get_corpus_dataloaders(config, is_test=args.test)
-
-        history = pretrain_model(
-            config,
-            train_dl,
-            val_dl,
-            tokenizer,
-            version=args.version,
-            initial_train=(args.state == "initial"),
-            load_from_epoch=args.load_epoch,
-        )
     elif args.phase == "finetuning":
         train_dl, val_dl, tokenizer = get_sft_dataloaders(config, is_test=args.test)
-
-        history = finetune_model(
-            config,
-            train_dl,
-            val_dl,
-            tokenizer,
-            version=args.version,
-            initial_train=(args.state == "initial"),
-            load_from_epoch=args.load_epoch,
-        )
     else:
         raise ValueError("invalid training phase")
 
-    with open(f"{config['output_dir_path']}/history_{args.version}.pkl", "wb") as f:
+    history = train_model(
+        config,
+        train_dl,
+        val_dl,
+        tokenizer,
+        stage=args.phase,
+        version=args.version,
+        initial_train=(args.state == "initial"),
+        load_from_epoch=args.load_epoch,
+    )
+
+    with open(f"{config['output_dir_path']}/{args.state}_history_{args.version}.pkl", "wb") as f:
         pickle.dump(history, f)
 
 
-# python script.py --model_size 40M --version v1_40M --phase (pretraining|finetuning) --state (initial|resume) --load_epoch N --test
+# pretraining script:
+# python script.py --model_size 40M --version v1_40M --phase pretraining --state (initial|resume) --load_epoch N --test
+#
+# finetuning script:
+# python script.py --model_size 40M --version v1_40M --phase finetuning --state (initial|resume) --load_epoch N --test
 if __name__ == "__main__":
     main()

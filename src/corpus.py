@@ -1,8 +1,8 @@
 # Copyright 2025-2026 Muhammad Nizwa. All rights reserved.
 
 from typing import List, Dict
-from datasets import load_dataset
 
+from datasets import load_dataset
 import torch
 from torch.utils.data import Dataset, DataLoader
 

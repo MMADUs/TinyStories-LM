@@ -1,8 +1,10 @@
 # Copyright 2025-2026 Muhammad Nizwa. All rights reserved.
 
+import json
+from pathlib import Path
 from typing import List, Dict
-from datasets import load_dataset
 
+from datasets import load_dataset
 import torch
 from torch.utils.data import Dataset, DataLoader
 
@@ -42,6 +44,16 @@ def make_structured_data(data):
             current_story["story"].append(line)
 
     return cleaned_data
+
+
+def save_structured_data(data, path):
+    with open(path, "w") as f:
+        json.dump(data, f)
+
+
+def load_structured_data(path):
+    with open(path, "r") as f:
+        return json.load(f)
 
 
 class TinyStoriesSFT(Dataset):
@@ -219,14 +231,32 @@ def get_sft_dataloaders(config, is_test=False):
         config["hf_instruct"], split="validation", trust_remote_code=trust
     )
 
+    # finetuning dataset path
+    dataset_dir = Path(config["output_dir_path"]) / "dataset"
+    dataset_dir.mkdir(parents=True, exist_ok=True)
+
+    train_ds_dir = dataset_dir / "sft_train.json"
+    val_ds_dir = dataset_dir / "sft_val.json"
+
+    # preprocessing if not exists, else load from disk
+    if train_ds_dir.exists() and val_ds_dir.exists():
+        print("loading structured data from disk...")
+
+        ds_train = load_structured_data(train_ds_dir)
+        ds_val = load_structured_data(val_ds_dir)
+    else:
+        print("running text preprocessing...")
+
+        ds_train = make_structured_data(ds_train["text"])
+        ds_val = make_structured_data(ds_val["text"])
+
+        save_structured_data(ds_train, train_ds_dir)
+        save_structured_data(ds_val, val_ds_dir)
+
     if is_test:
         # for testing, we use a smaller subset of the data to speed up the process
-        ds_train = ds_train.select(range(5000))
-        ds_val = ds_val.select(range(2500))
-
-    # preprocessing
-    ds_train = make_structured_data(ds_train["text"])
-    ds_val = make_structured_data(ds_val["text"])
+        ds_train = ds_train[:2500]
+        ds_val = ds_val[:2500]
 
     # get tokenizer
     tokenizer = get_tokenizer(config)

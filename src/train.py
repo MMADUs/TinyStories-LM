@@ -1,7 +1,7 @@
 # Copyright 2025-2026 Muhammad Nizwa. All rights reserved.
 
 import time
-from typing import Optional
+from typing import Optional, Literal
 from pathlib import Path
 
 import numpy as np
@@ -15,23 +15,25 @@ from src.utils import time_formatter, set_random_seed, calculate_scheduler_steps
 from src.serialization import get_or_build_state, save_checkpoint_state
 
 
-def pretrain_model(
+def train_model(
     config,
     train_dl,
     val_dl,
     tokenizer,
+    stage: Literal["pretraining", "finetuning"],
     version: str = "NA",
     initial_train: bool = True,
     load_from_epoch: Optional[int] = None,
 ) -> dict:
     """
-    The pretraining loop.
+    The training loop.
 
     Args:
     - config: model configuration dictionary
     - train_dl: training dataloader
     - val_dl: validation dataloader
     - tokenizer: trained tokenizer
+    - stage: training stage ("pretraining" or "finetuning")
     - version: version string to identify the checkpoint file (default: "NA")
     - initial_train: whether to start training from scratch (default: True)
     - load_from_epoch: epoch number to resume training from (default: None)
@@ -39,7 +41,7 @@ def pretrain_model(
     # set random seed for reproducibility
     set_random_seed(config["random_seed"])
 
-    pretrain_config = config["pretraining"]
+    stage_config = config[stage]
     device = config["device"]
     pad_id = tokenizer.token_to_id(config["special_tokens"]["padding"])
 
@@ -49,14 +51,14 @@ def pretrain_model(
 
     # initialize model and optimizer
     model, optimizer, additional_epochs = get_or_build_state(
-        config, pretrain_config, tokenizer, version, initial_train, load_from_epoch
+        config, stage, tokenizer, version, initial_train, load_from_epoch
     )
 
-    init_epoch += additional_epochs
+    init_epoch = additional_epochs
 
     # learning rate scheduler: linear warmup + cosine annealing
     num_training_steps, num_warmup_steps = calculate_scheduler_steps(
-        init_epoch, pretrain_config, len(train_dl)
+        init_epoch, stage_config, len(train_dl)
     )
 
     scheduler = get_cosine_schedule_with_warmup(
@@ -67,8 +69,8 @@ def pretrain_model(
 
     # criterion
     loss_fn = torch.nn.CrossEntropyLoss(
-        ignore_index=pretrain_config["cross_entropy_ignore_index"],
-        label_smoothing=pretrain_config["label_smoothing"],
+        ignore_index=stage_config["cross_entropy_ignore_index"],
+        label_smoothing=stage_config["label_smoothing"],
     )
 
     # # gradient scaler
@@ -85,7 +87,7 @@ def pretrain_model(
 
     start_time = time.time()
 
-    for epoch in range(init_epoch, pretrain_config["num_epochs"]):
+    for epoch in range(init_epoch, stage_config["num_epochs"]):
         epoch_start = time.time()
         torch.cuda.empty_cache()
 
@@ -93,7 +95,7 @@ def pretrain_model(
 
         global_train_loss = 0.0
         train_loss = 0.0
-        append_train_history_step = pretrain_config["append_train_history_step"]
+        append_train_history_step = stage_config["append_train_history_step"]
         train_step = 0
 
         batch_iter = tqdm(train_dl, desc=f"epoch {epoch+1}")
@@ -109,15 +111,26 @@ def pretrain_model(
             with autocast(device_type=str(device), dtype=torch.bfloat16):
                 # forward
                 logits = model(x=input_ids, mask=attention_mask)
+                # drop last token to shift logits
+                shift_logits = logits[:, :-1, :].contiguous()
 
                 # shift for next-token prediction: logits[t] predicts labels = input_ids[t+1]
-                shift_logits = logits[:, :-1, :].contiguous()
-                shift_labels = input_ids[:, 1:].contiguous()
+                if stage == "pretraining":
+                    # drop first token to shift labels
+                    shift_labels = input_ids[:, 1:].contiguous()
 
-                # replace PAD tokens with ignore_index
-                shift_labels[shift_labels == pad_id] = pretrain_config[
-                    "cross_entropy_ignore_index"
-                ]
+                    # replace PAD tokens with ignore_index
+                    shift_labels[shift_labels == pad_id] = stage_config[
+                        "cross_entropy_ignore_index"
+                    ]
+                elif stage == "finetuning":
+                    # labels PAD is already replaced with ignore_index in the dataset __getitem__
+                    labels = batch["labels"].to(device)
+
+                    # drop first token to shift labels
+                    shift_labels = labels[:, 1:].contiguous()
+                else:
+                    raise ValueError(f"Invalid stage: {stage}")
 
                 # compute loss
                 loss = loss_fn(
@@ -130,7 +143,7 @@ def pretrain_model(
             loss.backward()
             # gradient clipping
             torch.nn.utils.clip_grad_norm_(
-                model.parameters(), pretrain_config["clip_grad_max_norm"]
+                model.parameters(), stage_config["clip_grad_max_norm"]
             )
             # step optimizer
             # scaler.step(optimizer)
@@ -164,7 +177,7 @@ def pretrain_model(
 
         global_val_loss = 0.0
         val_loss = 0.0
-        append_val_history_step = pretrain_config["append_val_history_step"]
+        append_val_history_step = stage_config["append_val_history_step"]
         val_step = 0
 
         with torch.no_grad():
@@ -176,15 +189,26 @@ def pretrain_model(
                 with autocast(device_type=str(device), dtype=torch.bfloat16):
                     # forward
                     logits = model(x=input_ids, mask=attention_mask)
+                    # drop last token to shift logits
+                    shift_logits = logits[:, :-1, :].contiguous()
 
                     # shift for next-token prediction: logits[t] predicts labels = input_ids[t+1]
-                    shift_logits = logits[:, :-1, :].contiguous()
-                    shift_labels = input_ids[:, 1:].contiguous()
+                    if stage == "pretraining":
+                        # drop first token to shift labels
+                        shift_labels = input_ids[:, 1:].contiguous()
 
-                    # replace PAD tokens with ignore_index
-                    shift_labels[shift_labels == pad_id] = pretrain_config[
-                        "cross_entropy_ignore_index"
-                    ]
+                        # replace PAD tokens with ignore_index
+                        shift_labels[shift_labels == pad_id] = stage_config[
+                            "cross_entropy_ignore_index"
+                        ]
+                    elif stage == "finetuning":
+                        # labels PAD is already replaced with ignore_index in the dataset __getitem__
+                        labels = batch["labels"].to(device)
+
+                        # drop first token to shift labels
+                        shift_labels = labels[:, 1:].contiguous()
+                    else:
+                        raise ValueError(f"Invalid stage: {stage}")
 
                     # compute loss
                     loss = loss_fn(
@@ -208,7 +232,7 @@ def pretrain_model(
                     # reset
                     val_loss = 0.0
                     val_step = 0
-                    
+
         # overall loss in avg
         global_train_loss /= len(train_dl)
         global_val_loss /= len(val_dl)
@@ -234,7 +258,7 @@ def pretrain_model(
             global_val_loss,
             val_ppl,
             config,
-            pretrain_config,
+            stage_config,
             version,
         )
 

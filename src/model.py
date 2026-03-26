@@ -21,7 +21,7 @@ class InputEmbedding(nn.Module):
         self.vocab_size = vocab_size
 
         self.embedding = nn.Embedding(num_embeddings=vocab_size, embedding_dim=d_model)
-    
+
     def get_weights(self):
         return self.embedding.weight
 
@@ -367,7 +367,7 @@ class LMDecoder(nn.Module):
 
         self.proj = nn.Linear(d_model, vocab_size, bias=False)  # vocab projection
 
-        self.proj.weight = self.embedding.get_weights() # weight tying
+        self.proj.weight = self.embedding.get_weights()  # weight tying
 
     def forward(self, x, mask):
         # token to embedding
@@ -381,6 +381,75 @@ class LMDecoder(nn.Module):
         x = self.norm(x)
         logits = self.proj(x)
         return logits
+
+    @torch.no_grad()
+    def generate(
+        self,
+        input_ids,
+        special_tokens,
+        max_new_tokens,
+        temperature=1.0,
+        top_k=0,
+        top_p=0.0,
+    ):
+        """
+        Generate new tokens autoregressively given initial input_ids.
+        """
+        pad_id = special_tokens["padding"]
+        eos_id = special_tokens["end"]
+
+        for _ in range(max_new_tokens):
+            attention_mask = get_attn_mask(input_ids, pad_id).to(input_ids.device)
+            logits = self(input_ids, attention_mask)
+            next_token_logits = logits[:, -1, :]  # (1, vocab_size)
+
+            # apply temperature
+            next_token_logits = next_token_logits / temperature
+
+            # top-k filtering
+            if top_k > 0:
+                values, indices = torch.topk(next_token_logits, top_k, dim=-1)
+                filtered = torch.full_like(next_token_logits, float("-inf"))
+                filtered.scatter_(-1, indices, values)
+                next_token_logits = filtered
+
+            # top-p (nucleus) filtering
+            if top_p > 0.0:
+                sorted_logits, sorted_indices = torch.sort(
+                    next_token_logits, descending=True
+                )
+                sorted_probs = torch.softmax(sorted_logits, dim=-1)
+                cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
+
+                sorted_indices_to_remove = cumulative_probs > top_p
+
+                sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[
+                    ..., :-1
+                ].clone()
+
+                sorted_indices_to_remove[..., 0] = False
+
+                sorted_logits = sorted_logits.masked_fill(
+                    sorted_indices_to_remove, float("-inf")
+                )
+
+                next_token_logits = torch.full_like(next_token_logits, float("-inf"))
+                next_token_logits.scatter_(
+                    dim=-1, index=sorted_indices, src=sorted_logits
+                )
+
+            # sample
+            probs = torch.softmax(next_token_logits, dim=-1)
+            next_token_id = torch.multinomial(probs, 1)
+
+            # append
+            input_ids = torch.cat([input_ids, next_token_id], dim=1)
+
+            # stop if EOS is generated
+            if next_token_id.item() == eos_id:
+                break
+
+        return input_ids
 
 
 def generate_causal_mask(seq_len, device):
@@ -406,8 +475,10 @@ def generate_padding_mask(input_ids, pad_id):
 
 
 def get_attn_mask(input_ids, pad_id):
-    causal = generate_causal_mask(input_ids.size(1), input_ids.device)  # (1, 1, seq_len, seq_len)
-    padding = generate_padding_mask(input_ids, pad_id) # (B, 1, 1, L)
+    causal = generate_causal_mask(
+        input_ids.size(1), input_ids.device
+    )  # (1, 1, seq_len, seq_len)
+    padding = generate_padding_mask(input_ids, pad_id)  # (B, 1, 1, L)
     return causal & padding  # combine masks
 
 
