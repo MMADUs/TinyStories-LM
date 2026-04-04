@@ -117,8 +117,7 @@ class MultiHeadAttention(nn.Module):
 
 class RMSNorm(nn.Module):
     """
-    A RMS normalization that normalizes across the last dimension (d_model) using root mean square.
-    A simpler alternative to layer normalization.
+    A RMS normalization that normalizes using root mean square.
 
     Args:
     - d_model: dimension of the model (embedding size)
@@ -160,7 +159,7 @@ class ResidualConnection(nn.Module):
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x, sublayer):
-        # pre-norm: apply lnorm before the sublayer
+        # pre-norm: apply norm before the sublayer
         norm = self.norm(x)
         x_hat = sublayer(norm)
         out = self.dropout(x_hat)

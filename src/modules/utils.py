@@ -3,6 +3,8 @@
 import torch
 import torch.nn as nn
 
+from src.modules.blocks import RMSNorm
+
 
 def generate_causal_mask(seq_len, device):
     """
@@ -49,6 +51,5 @@ def initialize_parameters(model, init_std):
             nn.init.zeros_(p)  # biases
 
     for m in model.modules():
-        if isinstance(m, nn.LayerNorm):
-            nn.init.ones_(m.weight)
-            nn.init.zeros_(m.bias)
+        if isinstance(m, RMSNorm):
+            nn.init.ones_(m.alpha)

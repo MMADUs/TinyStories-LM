@@ -6,6 +6,8 @@ A rigorous PyTorch implementation of decoder-only transformer language models tr
 
 ### Inference & Generation
 
+The trained weights can be obtained from here: [Pretrained Model](https://drive.google.com/drive/folders/12hX7t6NFgQI5pfisatJ7rvMCQWtZeBrm?usp=sharing)
+
 See [Test and Result.ipynb](Test%20and%20Result.ipynb) for interactive examples:
 
 - **Next Word Prediction**: Given a prompt, generate the next tokens using the pretrained model
@@ -84,7 +86,7 @@ Input → RMSNorm → Multi-Head Attention → Residual → RMSNorm → SwiGLU F
 
 | Parameter | 9M | 19M | 40M |
 |-----------|-----|-----|-----|
-| Vocab Size | 10,000+ | 10,000+ | 10,000+ |
+| Vocab Size | 20,000 | 20,000 | 20,000 |
 | Embedding Dim (d_model) | 384 | 512 | 768 |
 | Num Heads (h) | 8 | 8 | 16 |
 | FFN Dim (d_ff) | 1024 | 1536 | 2560 |

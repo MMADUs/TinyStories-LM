@@ -106,7 +106,7 @@ class MixtureOfExperts(nn.Module):
 
     def _aux_loss(self, top_k_indices, batch, seq_len):
         """
-        Load balancing loss — penalizes uneven expert utilization.
+        Load balancing loss: penalizes uneven expert utilization.
         From Switch Transformer: encourages uniform distribution across experts.
         """
         # fraction of tokens routed to each expert

@@ -169,14 +169,11 @@ class LMDecoder(nn.Module):
 
 def build_model(config, tokenizer):
     """
-    Build the MicroLM model from the configuration and tokenizer.
+    Build the LMDecoder model from the configuration and tokenizer.
 
     Args:
     - config: a dictionary containing model hyperparameters
     - tokenizer: a tokenizer object with a vocab_size attribute
-
-    Returns:
-    - model: an instance of the MicroLM class
     """
     vocab_size = tokenizer.get_vocab_size()
     d_model = config["d_model"]
