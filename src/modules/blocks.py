@@ -8,12 +8,11 @@ from src.modules.rope import apply_RoPE
 
 
 class InputEmbedding(nn.Module):
-    """
-    Input embedding layer.
+    """input embedding layer.
 
     Args:
-    - d_model: dimension of the model (embedding size)
-    - vocab_size: size of the vocabulary
+        d_model: dimension of the model (embedding size)
+        vocab_size: size of the vocabulary
     """
 
     def __init__(self, d_model: int, vocab_size: int):
@@ -32,13 +31,12 @@ class InputEmbedding(nn.Module):
 
 
 class MultiHeadAttention(nn.Module):
-    """
-    multi-head self-attention blocks with RoPE.
+    """multi-head self-attention blocks with RoPE.
 
     Args:
-    - d_model: dimension of the model (embedding size)
-    - h: number of attention heads
-    - dropout: dropout rate
+        d_model: dimension of the model (embedding size)
+        h: number of attention heads
+        dropout: dropout rate
     """
 
     def __init__(self, d_model: int, h: int, dropout: float):
@@ -59,7 +57,13 @@ class MultiHeadAttention(nn.Module):
         self.dropout = nn.Dropout(dropout)
 
     @staticmethod
-    def attention(query, key, value, dropout: nn.Dropout, mask=None):
+    def attention(
+        query: torch.Tensor,
+        key: torch.Tensor,
+        value: torch.Tensor,
+        dropout: nn.Dropout,
+        mask=None,
+    ):
         d_k = query.shape[-1]
 
         # compute attention score
@@ -116,15 +120,14 @@ class MultiHeadAttention(nn.Module):
 
 
 class RMSNorm(nn.Module):
-    """
-    A RMS normalization that normalizes using root mean square.
+    """normalization that normalizes using root mean square
 
     Args:
-    - d_model: dimension of the model (embedding size)
-    - eps: small value to prevent division by zero (default: 1e-6)
+        d_model: dimension of the model (embedding size)
+        eps: small value to prevent division by zero (default: 1e-6)
     """
 
-    def __init__(self, d_model: int, eps: float = 10**-6):
+    def __init__(self, d_model: int, eps: float = 1e-6):
         super().__init__()
         self.eps = eps
         # alpha is the only learnable parameter
@@ -141,15 +144,11 @@ class RMSNorm(nn.Module):
 
 
 class ResidualConnection(nn.Module):
-    """
-    A residual connection with pre-layer normalization.
-    Ensure gradient flow = prevent vanishing gradients.
-    Flow: norm --> sublayer --> dropout --> residual add.
+    """residual connection with pre-layer normalization
 
     Args:
-    - d_model: dimension of the model (embedding size)
-    - dropout: dropout rate
-    - norm_strategy: normalization strategy (RMSNorm or LayerNorm)
+        d_model: dimension of the model (embedding size)
+        dropout: dropout rate
     """
 
     def __init__(self, d_model: int, dropout: float):

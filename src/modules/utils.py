@@ -1,5 +1,7 @@
 # Copyright 2025-2026 Muhammad Nizwa. All rights reserved.
 
+import math
+
 import torch
 import torch.nn as nn
 
@@ -7,8 +9,14 @@ from src.modules.blocks import RMSNorm
 
 
 def generate_causal_mask(seq_len, device):
-    """
-    Generate a causal mask for self-attention.
+    """generate a causal mask for self-attention
+    
+    Args:
+        seq_len: length of sequence
+        device: torch device
+    
+    Returns:
+        cau_mask: (1, 1, seq_len, seq_len)
     """
     triangular = torch.tril(
         torch.ones((seq_len, seq_len), device=device, dtype=torch.bool)
@@ -19,8 +27,14 @@ def generate_causal_mask(seq_len, device):
 
 
 def generate_padding_mask(input_ids, pad_id):
-    """
-    Generate a padding mask for self-attention.
+    """generate a padding mask for self-attention
+    
+    Args:
+        input_ids: input tokens
+        pad_id: padding token id
+    
+    Returns:
+        pad_mask: (B, 1, 1, L)
     """
     mask = input_ids != pad_id  # True for valid tokens, False for padding
     # reshaping
@@ -29,6 +43,15 @@ def generate_padding_mask(input_ids, pad_id):
 
 
 def get_attn_mask(input_ids, pad_id):
+    """get attention mask for training
+
+    Args:
+        input_ids: input tokens
+        pad_id: padding token id
+
+    Returns:
+        full_mask: (B, 1, 1, L)
+    """
     causal = generate_causal_mask(
         input_ids.size(1), input_ids.device
     )  # (1, 1, seq_len, seq_len)
@@ -36,20 +59,28 @@ def get_attn_mask(input_ids, pad_id):
     return causal & padding  # combine masks
 
 
-def initialize_parameters(model, init_std):
-    """
-    Initialize the parameters of the model.
+def init_params(model: nn.Module, init_std, n_layers):
+    """initialize model parameters
 
     Args:
-    - model: the model to initialize
-    - init_std: standard deviation of the Gassian distribution for weight initialization
+        model: the model to initialize
+        init_std: standard deviation
+        n_layers: number of decoder blocks
     """
-    for p in model.parameters():
-        if p.dim() > 1:
-            nn.init.normal_(p, mean=0.0, std=init_std)  # weight matrices
-        else:
-            nn.init.zeros_(p)  # biases
-
-    for m in model.modules():
-        if isinstance(m, RMSNorm):
-            nn.init.ones_(m.alpha)
+    for name, module in model.named_modules():
+        if isinstance(module, nn.Linear):
+            std = init_std
+            # smaller std for projection layers
+            if name.endswith(("w_o", "proj_2")):
+                std = init_std / math.sqrt(2 * n_layers)
+            # layer weights
+            nn.init.normal(module.weight, mean=0.0, std=std)
+            # layer with bias
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
+        # embedding init
+        elif isinstance(module, nn.Embedding):
+            nn.init.normal(module.weight, mean=0.0, std=std)
+        # rms norm init
+        elif isinstance(module, RMSNorm):
+            nn.init.ones_(module.alpha)

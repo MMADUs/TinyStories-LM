@@ -6,14 +6,12 @@ import torch.nn.functional as F
 
 
 class SwiGLUFeedForward(nn.Module):
-    """
-    A feed forward network with SwiGLU activation.
-    Flow: linear --> SwiGLU --> linear --> dropout.
+    """feed forward network with SwiGLU activation.
 
     Args:
-    - d_model: dimension of the model (embedding size)
-    - d_ff: dimension of the feed forward network
-    - dropout: dropout rate
+        d_model: dimension of the model (embedding size)
+        d_ff: dimension of the feed forward network
+        dropout: dropout rate
     """
 
     def __init__(self, d_model: int, d_ff: int, dropout: float):
