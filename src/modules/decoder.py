@@ -9,20 +9,25 @@ from src.modules.blocks import (
     RMSNorm,
     ResidualConnection,
 )
-from src.modules.moe import SwiGLUFeedForward
-from src.modules.utils import get_attn_mask, initialize_parameters
+from src.modules.moe import SwiGLUFeedForward, MixtureOfExperts
+from src.modules.utils import get_attn_mask, init_params
 
 
 class DecoderBlock(nn.Module):
-    """
-    A single block of the decoder.
-    Flow: norm --> masked attn --> residual --> norm --> ffn --> residual.
+    """the decoder block
+
+    norm -> masked attn -> residual -> norm -> ffn/moe -> residual
 
     Args:
-    - d_model: dimension of the model (embedding size)
-    - h: number of attention heads
-    - d_ff: dimension of the feed forward network
-    - dropout: dropout rate
+        d_model: dimension of the model (embedding size)
+        h: number of attention heads
+        d_ff: dimension of the feed forward network
+        dropout: dropout rate
+        is_training: enable during training phase (specifically for MoE)
+        using_moe: mixture of experts flag
+        num_experts: number of MoE experts
+        top_k: top k experts to route
+        aux_loss_coef: auxiliary loss scale factor
     """
 
     def __init__(
@@ -31,11 +36,32 @@ class DecoderBlock(nn.Module):
         h: int,
         d_ff: int,
         dropout: float,
+        # required args to enable MoE, default to feedforward
+        is_training: bool,
+        using_moe: bool = False,
+        num_experts: int = None,
+        top_k: int = None,
+        aux_loss_coef: float = None,
     ):
         super().__init__()
 
+        self.using_moe = using_moe
+
         self.attn = MultiHeadAttention(d_model, h, dropout)
-        self.ffn = SwiGLUFeedForward(d_model, d_ff, dropout)
+
+        if using_moe:
+            self.ffn = MixtureOfExperts(
+                d_model,
+                d_ff,
+                dropout,
+                is_training,
+                num_experts,
+                top_k,
+                aux_loss_coef,
+            )
+        else:
+            self.ffn = SwiGLUFeedForward(d_model, d_ff, dropout)
+
         # residual blocks
         self.attn_resid = ResidualConnection(d_model, dropout)
         self.ffn_resid = ResidualConnection(d_model, dropout)
@@ -43,22 +69,33 @@ class DecoderBlock(nn.Module):
     def forward(self, x, mask):
         # masked attention
         x = self.attn_resid(x, lambda x: self.attn(x, mask))
+
         # feed forward
-        x = self.ffn_resid(x, self.ffn)
-        return x
+        if self.using_moe:
+            ffn_out, aux_loss = self.ffn(x)
+            x = self.ffn_resid(x, lambda _: ffn_out)
+        else:
+            x = self.ffn_resid(x, self.ffn)
+            aux_loss = x.new_tensor(0.0)
+
+        return x, aux_loss
 
 
 class LMDecoder(nn.Module):
-    """
-    The Decoder Model.
+    """the decoder model class
 
     Args:
-    - vocab_size: size of the vocabulary
-    - d_model: dimension of the model (embedding size)
-    - h: number of attention heads
-    - d_ff: dimension of the feed forward network
-    - num_layers: number of decoder blocks
-    - dropout: dropout rate
+        vocab_size: size of the vocabulary
+        d_model: dimension of the model (embedding size)
+        h: number of attention heads
+        d_ff: dimension of the feed forward network
+        num_layers: number of decoder blocks
+        dropout: dropout rate
+        is_training: enable during training phase (specifically for MoE)
+        using_moe: mixture of experts flag
+        num_experts: number of MoE experts
+        top_k: top k experts to route
+        aux_loss_coef: auxiliary loss scale factor
     """
 
     def __init__(
@@ -66,16 +103,36 @@ class LMDecoder(nn.Module):
         vocab_size: int,
         d_model: int,
         h: int,
+        # dim feed forward for both ffn or experts ffn
         d_ff: int,
         num_layers: int,
         dropout: float,
+        # required args to enable MoE, default to feedforward
+        is_training: bool,
+        using_moe: bool = False,
+        num_experts: int = None,
+        top_k: int = None,
+        aux_loss_coef: float = None,
     ):
         super().__init__()
 
         self.embedding = InputEmbedding(d_model, vocab_size)  # token embedding
         # stack of N decoder blocks
         self.layers = nn.ModuleList(
-            [DecoderBlock(d_model, h, d_ff, dropout) for _ in range(num_layers)]
+            [
+                DecoderBlock(
+                    d_model,
+                    h,
+                    d_ff,
+                    dropout,
+                    is_training,
+                    using_moe,
+                    num_experts,
+                    top_k,
+                    aux_loss_coef,
+                )
+                for _ in range(num_layers)
+            ]
         )
 
         # final norm layer
@@ -88,14 +145,18 @@ class LMDecoder(nn.Module):
         # token to embedding
         x = self.embedding(x)
 
+        total_aux_loss = x.new_tensor(0.0)
+
         # iterate through decoder blocks
         for layer in self.layers:
-            x = layer(x, mask)
+            x, aux_loss = layer(x, mask)
+            total_aux_loss += aux_loss
 
         # normalize and project to vocab size
         x = self.norm(x)
         logits = self.proj(x)
-        return logits
+
+        return logits, total_aux_loss
 
     @torch.no_grad()
     def generate(
@@ -107,15 +168,15 @@ class LMDecoder(nn.Module):
         top_k=0,
         top_p=0.0,
     ):
-        """
-        Generate new tokens autoregressively given initial input_ids.
-        """
+        """autoregressive generation: currently only support 1 batch"""
+
         pad_id = special_tokens["padding"]
         eos_id = special_tokens["end"]
 
         for _ in range(max_new_tokens):
             attention_mask = get_attn_mask(input_ids, pad_id).to(input_ids.device)
-            logits = self(input_ids, attention_mask)
+            logits, _ = self(input_ids, attention_mask)
+
             next_token_logits = logits[:, -1, :]  # (1, vocab_size)
 
             # apply temperature
@@ -167,23 +228,42 @@ class LMDecoder(nn.Module):
         return input_ids
 
 
-def build_model(config, tokenizer):
-    """
-    Build the LMDecoder model from the configuration and tokenizer.
+def build_model(config, tokenizer, is_training):
+    """helper function
 
     Args:
-    - config: a dictionary containing model hyperparameters
-    - tokenizer: a tokenizer object with a vocab_size attribute
+        config: a dictionary containing model configuration
+        tokenizer: a tokenizer object with a vocab_size attribute
+        is_training: enable during training phase (specifically for MoE)
     """
     vocab_size = tokenizer.get_vocab_size()
+
+    # configuration needed
     d_model = config["d_model"]
     h = config["num_heads"]
     d_ff = config["d_ff"]
     num_layers = config["num_layers"]
     dropout = config["dropout"]
+    using_moe = config["using_moe"]
+    num_experts = config["num_experts"]
+    top_k = config["top_k_experts"]
+    aux_loss_coef = config.get("aux_loss_coef", 0.01)
+
     init_std = config["init_std"]
 
-    model = LMDecoder(vocab_size, d_model, h, d_ff, num_layers, dropout)
-    initialize_parameters(model, init_std)
+    model = LMDecoder(
+        vocab_size,
+        d_model,
+        h,
+        d_ff,
+        num_layers,
+        dropout,
+        is_training,
+        using_moe,
+        num_experts,
+        top_k,
+        aux_loss_coef,
+    )
+    init_params(model, init_std)
 
     return model

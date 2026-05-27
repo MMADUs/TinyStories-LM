@@ -8,8 +8,16 @@ from src.modules.decoder import build_model
 
 
 def get_checkpoint_path(config, stage_config, version, load_from_epoch):
-    """
-    Get the checkpoint path for the given version and epoch number.
+    """get model checkpoint path
+
+    Args:
+        config: configuration dictionary
+        stage_config: training stage configuration dictionary
+        version: model version id
+        load_from_epoch: number epoch
+
+    Returns:
+        ckpt_path: the checkpoint path
     """
     output_dir = Path(config["output_dir_path"])
 
@@ -25,12 +33,67 @@ def get_checkpoint_path(config, stage_config, version, load_from_epoch):
     return ckpt_path
 
 
+def get_last_checkpoint_state(
+    config, stage_config, tokenizer, version, load_from_epoch
+):
+    """load specific checkpoint
+
+    Args:
+        config: configuration dictionary
+        stage_config: training stage configuration dictionary
+        tokenizer: trained tokenizer
+        version: model version id
+        load_from_epoch: number epoch
+    """
+    device = config["device"]
+
+    ckpt_path = get_checkpoint_path(config, stage_config, version, load_from_epoch)
+
+    checkpoint = torch.load(ckpt_path)
+    model_state = checkpoint["model"]
+    optimizer_state = checkpoint["optimizer"]
+    last_epoch = checkpoint["epoch"]
+
+    val_loss = checkpoint["val_loss"]
+    val_ppl = checkpoint["val_perplexity"]
+
+    print(
+        f"Checkpoint loaded from epoch {last_epoch+1} with val loss {val_loss:.4f} and val perplexity {val_ppl:.4f}"
+    )
+
+    model = build_model(config, tokenizer)
+    model.load_state_dict(model_state)
+    model = model.to(device)
+    # model = torch.compile(model)
+
+    lr = stage_config["lr"]
+    weight_decay = stage_config["weight_decay"]
+
+    optimizer = torch.optim.AdamW(
+        model.parameters(), lr=lr, weight_decay=weight_decay, fused=True
+    )
+    optimizer.load_state_dict(optimizer_state)
+
+    return model, optimizer, last_epoch
+
+
 def get_or_build_state(
     config, stage, tokenizer, version, initial_train, load_from_epoch
 ):
-    """
-    Get the model and optimizer state for training. If initial_train is True, build a new model and optimizer.
-    Otherwise, load the model and optimizer state from the last checkpoint.
+    """get model and optimizer state
+
+    Args:
+        config: configuration dictionary
+        stage: training stage
+        tokenizer: trained tokenizer
+        version: model version id
+        initial_train: whether to train from the start
+        load_from_epoch: number epoch
+
+    Returns:
+        model: the loaded model
+        optimizer: loaded adamW
+        additional_epochs: the continous epoches
     """
     stage_config = config[stage]
     device = config["device"]
@@ -108,8 +171,18 @@ def get_or_build_state(
 def save_checkpoint_state(
     model, optimizer, scheduler, epoch, val_loss, val_ppl, config, stage_config, version
 ):
-    """
-    Save the checkpoint state for model and optimizer. This is used to resume training from the last checkpoint.
+    """save a checkpoint during training
+
+    Args:
+        model: trained model
+        optimizer: trained optimizer
+        scheduler: learning rate scheduler
+        epoch: the number of current epoch
+        val_loss: metadata metrics
+        val_ppl: metadata metrics
+        config: configuration dictionary
+        stage_config: training stage configuration dictionary
+        version: model version id
     """
     ckpt_state_dict = {
         "model": model.state_dict(),
@@ -131,41 +204,3 @@ def save_checkpoint_state(
     torch.save(ckpt_state_dict, curr_ckpt_path)
 
     print(f"Checkpoint saved at: {curr_ckpt_path}")
-
-
-def get_last_checkpoint_state(
-    config, stage_config, tokenizer, version, load_from_epoch
-):
-    """
-    Load the last checkpoint state for model and optimizer. This is used to resume training from the last checkpoint.
-    """
-    device = config["device"]
-
-    ckpt_path = get_checkpoint_path(config, stage_config, version, load_from_epoch)
-
-    checkpoint = torch.load(ckpt_path)
-    model_state = checkpoint["model"]
-    optimizer_state = checkpoint["optimizer"]
-    last_epoch = checkpoint["epoch"]
-
-    val_loss = checkpoint["val_loss"]
-    val_ppl = checkpoint["val_perplexity"]
-
-    print(
-        f"Checkpoint loaded from epoch {last_epoch+1} with val loss {val_loss:.4f} and val perplexity {val_ppl:.4f}"
-    )
-
-    model = build_model(config, tokenizer)
-    model.load_state_dict(model_state)
-    model = model.to(device)
-    # model = torch.compile(model)
-
-    lr = stage_config["lr"]
-    weight_decay = stage_config["weight_decay"]
-
-    optimizer = torch.optim.AdamW(
-        model.parameters(), lr=lr, weight_decay=weight_decay, fused=True
-    )
-    optimizer.load_state_dict(optimizer_state)
-
-    return model, optimizer, last_epoch

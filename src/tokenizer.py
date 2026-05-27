@@ -2,7 +2,8 @@
 
 from pathlib import Path
 
-from tokenizers import Tokenizer
+from tokenizers import Tokenizer, Regex
+from tokenizers.normalizers import Sequence, Replace, Strip
 from tokenizers.models import WordLevel, BPE
 from tokenizers.trainers import WordLevelTrainer, BpeTrainer
 from tokenizers.pre_tokenizers import Whitespace, ByteLevel
@@ -10,10 +11,25 @@ from tokenizers.processors import ByteLevel as ByteLevelProcessor
 from tokenizers.decoders import ByteLevel as ByteLevelDecoder
 
 
+def build_normalizer(config):
+    """helper function to build tokenizer normalizer"""
+    normalizers = []
+
+    if config.get("normalize_whitespace", True):
+        # collapse multiple whitespace chars into one normal space
+        normalizers.append(Replace(Regex(r"\s+"), " "))
+
+        # remove leading/trailing whitespace
+        normalizers.append(Strip())
+
+    if not normalizers:
+        return None
+
+    return Sequence(normalizers)
+
+
 def extract_from_corpus(ds):
-    """
-    Custom extractor function, depends on the dataset structure.
-    """
+    """custom extractor function, depends on the dataset structure"""
     for item in ds:
         text = item.get("text", "")
         if text:  # skip empty items
@@ -21,11 +37,13 @@ def extract_from_corpus(ds):
 
 
 def get_tokenizer(config) -> Tokenizer:
-    """
-    Get an existing tokenizer from disk.
+    """get an existing tokenizer from disk
 
     Args:
-    - config: model configuration dictionary
+        config: model configuration dictionary
+
+    Returns:
+        tokenizer: trained tokenizer
     """
     output_dir = Path(config["output_dir_path"])
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -41,12 +59,14 @@ def get_tokenizer(config) -> Tokenizer:
 
 
 def get_or_train_tokenizer(config, ds) -> Tokenizer:
-    """
-    Get an existing tokenizer from disk or train a new one from the given dataset.
+    """get existing tokenizer from disk or train a new one from dataset
 
     Args:
-    - config: model configuration dictionary
-    - ds: dataset to train the tokenizer on
+        config: model configuration dictionary
+        ds: dataset to train the tokenizer on
+
+    Returns:
+        tokenizer: trained tokenizer
     """
     output_dir = Path(config["output_dir_path"])
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -75,6 +95,9 @@ def get_or_train_tokenizer(config, ds) -> Tokenizer:
     strategy = config["tokenizer_strategy"]
     min_freq = config["min_frequency"]
 
+    # tokenizer normalizer
+    normalizer = build_normalizer(config)
+
     pre_tokenizer_strategy = config["pre_tokenizer_strategy"]
 
     if pre_tokenizer_strategy == "whitespace":
@@ -88,6 +111,8 @@ def get_or_train_tokenizer(config, ds) -> Tokenizer:
     if strategy == "subword-level":
         model = BPE(unk_token=unk_token)
         tokenizer = Tokenizer(model)
+
+        tokenizer.normalizer = normalizer
         tokenizer.pre_tokenizer = pre_tokenizer
 
         if isinstance(pre_tokenizer, ByteLevel):
@@ -110,6 +135,8 @@ def get_or_train_tokenizer(config, ds) -> Tokenizer:
 
         model = WordLevel(unk_token=unk_token)
         tokenizer = Tokenizer(model)
+
+        tokenizer.normalizer = normalizer
         tokenizer.pre_tokenizer = pre_tokenizer
 
         trainer = WordLevelTrainer(

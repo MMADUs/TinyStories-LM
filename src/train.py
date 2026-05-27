@@ -24,18 +24,20 @@ def train_model(
     initial_train: bool = True,
     load_from_epoch: Optional[int] = None,
 ) -> dict:
-    """
-    The training loop.
+    """the training loop
 
     Args:
-    - config: model configuration dictionary
-    - train_dl: training dataloader
-    - val_dl: validation dataloader
-    - tokenizer: trained tokenizer
-    - stage: training stage ("pretraining" or "finetuning")
-    - version: version string to identify the checkpoint file (default: "NA")
-    - initial_train: whether to start training from scratch (default: True)
-    - load_from_epoch: epoch number to resume training from (default: None)
+        config: model configuration dictionary
+        train_dl: training dataloader
+        val_dl: validation dataloader
+        tokenizer: trained tokenizer
+        stage: training stage ("pretraining" or "finetuning")
+        version: version string to identify the checkpoint file (default: "NA")
+        initial_train: whether to start training from scratch (default: True)
+        load_from_epoch: epoch number to resume training from (default: None)
+
+    Returns:
+        history: the training history in dictionary
     """
     # set random seed for reproducibility
     set_random_seed(config["random_seed"])
@@ -109,7 +111,10 @@ def train_model(
 
             with autocast(device_type=str(device), dtype=torch.bfloat16):
                 # forward
-                logits = model(x=input_ids, mask=attention_mask)
+                logits, aux_loss = model(x=input_ids, mask=attention_mask)
+                
+                # TODO: handle aux loss
+
                 # drop last token to shift logits
                 shift_logits = logits[:, :-1, :].contiguous()
 
@@ -187,7 +192,10 @@ def train_model(
 
                 with autocast(device_type=str(device), dtype=torch.bfloat16):
                     # forward
-                    logits = model(x=input_ids, mask=attention_mask)
+                    logits, aux_loss = model(x=input_ids, mask=attention_mask)
+
+                    # TODO: handle aux loss
+
                     # drop last token to shift logits
                     shift_logits = logits[:, :-1, :].contiguous()
 

@@ -14,7 +14,7 @@ from src.utils import DeviceDataLoader
 
 def make_structured_data(data):
     """
-    Merge row-wise data into structured data with fields: features, words, summary, story.
+    merge row-wise data into structured data with fields: features, words, summary, story.
     """
     cleaned_data = []
     current_story = {"features": "", "words": "", "summary": "", "story": []}
@@ -57,13 +57,12 @@ def load_structured_data(path):
 
 
 class TinyStoriesSFT(Dataset):
-    """
-    Custom torch dataset class for TinyStories data. It takes the SFT dataset and a trained tokenizer.
+    """supervised fine tuning torch dataset
 
     Args:
-    - config: model configuration dictionary
-    - data: raw dataset to be processed
-    - tokenizer: trained tokenizer to tokenize the text data
+        config: model configuration dictionary
+        data: raw dataset to be processed
+        tokenizer: trained tokenizer to tokenize the text data
     """
 
     def __init__(self, config, data, tokenizer):
@@ -215,11 +214,16 @@ class CollateFn:
 
 
 def get_sft_dataloaders(config, is_test=False):
-    """
-    Returns train and val SFT dataloaders.
+    """returns train and val SFT dataloaders
 
     Args:
-    - config: model configuration dictionary
+        config: model configuration dictionary
+        is_test: return few samples of the dataset for testing
+
+    Returns:
+        train_dl: training dataloader
+        val_dl: validation dataloader
+        tokenizer: trained tokenizer
     """
     trust = config["trust_source"]
 

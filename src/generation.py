@@ -13,22 +13,21 @@ from src.serialization import get_checkpoint_path
 
 
 class ModelLoader:
-    """
-    Class for loading model checkpoints.
+    """class for loading model checkpoints
 
     Args:
-    - config: model configuration dictionary
-    - stage: training stage, either "pretraining" or "finetuning"
-    - version: version string to identify the model checkpoint to load
-    - context: initial dialogue context to prime the model with (optional)
+        config: model configuration dictionary
+        stage: training stage, either "pretraining" or "finetuning"
+        version: model version id
+        load_from_epoch: checkpoint epoch
     """
 
     def __init__(
         self,
         config,
         stage: Literal["pretraining", "finetuning"],
-        version,
-        load_from_epoch,
+        version: str,
+        load_from_epoch: int,
     ):
         self.device = config["device"]
         self.config = config
@@ -54,7 +53,8 @@ class ModelLoader:
         checkpoint = torch.load(ckpt_path)
         model_state = checkpoint["model"]
 
-        self.model = build_model(self.config, self.tokenizer)
+        # is_training is disabled since this class loader is for inference
+        self.model = build_model(self.config, self.tokenizer, is_training=False)
         self.model.load_state_dict(model_state)
         self.model = self.model.to(self.device)
         self.model.eval()
@@ -74,9 +74,22 @@ class ModelLoader:
         top_k: int = 50,
         top_p: float = 0.9,
     ):
+        # maximum number of tokens the model allowed to generate
         self.max_new_tokens = max_new_tokens
+
+        # controls how random or creative the generation is
+        # lower temp = more deterministic
+        # higher temp = more random
         self.temperature = temperature
+
+        # the model only samples from the K most likely tokens
+        # prevents very unlikely tokens from being selected
+        # if top_k = 1 (greedy decoding)
+        # if top_k = 0 (disabled top-k filter)
         self.top_k = top_k
+
+        # selects the smallest set of tokens whose cumulative proba reaches p
+        # model samples only from token that together cover top p of proba mass
         self.top_p = top_p
 
     def generate(self, input_ids, special_tokens):
@@ -94,6 +107,7 @@ def next_word_prediction(
     model_loader: ModelLoader,
     text_input: str = "",
 ) -> str:
+    """helper function to perform next word predicition (continous text)"""
     config, _stage_config = model_loader.get_configs
     tokenizer = model_loader.get_tokenizer
 
@@ -152,6 +166,7 @@ def next_word_prediction(
 def generate_story(
     model_loader: ModelLoader, features: List[str], words: List[str], summary: str
 ):
+    """helper function to fully generate stories based on prompts and feature conditioning"""
     config, _stage_config = model_loader.get_configs
     tokenizer = model_loader.get_tokenizer
 
@@ -179,22 +194,24 @@ def generate_story(
     summary_ids = tokenizer.encode(summary).ids if summary else []
 
     prompt_tokens = (
-        [bos_id] # [BOS]
-        + [features_start] # <features>
-        + features_ids # features ctx
-        + [features_end] # </features>
-        + [words_start] # <words>
-        + words_ids # words ctx
-        + [words_end] # </words>
-        + [summary_start] # <summary>
-        + summary_ids # summary ctx
-        + [summary_end] # </summary>
-        + [story_start] # <story>
+        [bos_id]  # [BOS]
+        + [features_start]  # <features>
+        + features_ids  # features ctx
+        + [features_end]  # </features>
+        + [words_start]  # <words>
+        + words_ids  # words ctx
+        + [words_end]  # </words>
+        + [summary_start]  # <summary>
+        + summary_ids  # summary ctx
+        + [summary_end]  # </summary>
+        + [story_start]  # <story>
     )
 
-    input_ids = torch.tensor(
-        prompt_tokens, dtype=torch.long, device=config["device"]
-    ).unsqueeze(0).clone()
+    input_ids = (
+        torch.tensor(prompt_tokens, dtype=torch.long, device=config["device"])
+        .unsqueeze(0)
+        .clone()
+    )
 
     special_tokens_ids = {
         "end": eos_id,
@@ -219,7 +236,9 @@ def generate_story(
     }
 
     prompt_len = input_ids.size(1)
-    generated_ids = list_ids[prompt_len:] # take the response part only, skip the prompt
+    generated_ids = list_ids[
+        prompt_len:
+    ]  # take the response part only, skip the prompt
 
     cleaned_ids = []
     for token_id in generated_ids:

@@ -12,9 +12,7 @@ from src.modules.decoder import build_model
 
 
 def set_random_seed(seed: int):
-    """
-    Set random seed for reproducibility.
-    """
+    """set random seed for reproducibility"""
     os.environ["PYTHONHASHSEED"] = str(seed)
     random.seed(seed)
     np.random.seed(seed)
@@ -26,9 +24,7 @@ def set_random_seed(seed: int):
 
 
 def calculate_scheduler_steps(init_epoch, train_config, train_dl_length):
-    """
-    Calculate the number of training steps and warmup steps for lr scheduler.
-    """
+    """calculate the number of training steps and warmup steps for lr scheduler"""
     lr_warmup_percentage = train_config["lr_warmup_percentage"]
     remaining_epochs = train_config["num_epochs"] - init_epoch
 
@@ -39,12 +35,11 @@ def calculate_scheduler_steps(init_epoch, train_config, train_dl_length):
 
 
 class DeviceDataLoader:
-    """
-    DeviceDataLoader is a wrapper around torch DataLoader that moves data to the specified device.
+    """wrapper around torch DataLoader that moves data to the specified device
 
     Args:
-    - dl: torch DataLoader to wrap
-    - device: torch device to move data to
+        dl: torch DataLoader to wrap
+        device: torch device to move data to
     """
 
     def __init__(self, dl: DataLoader, device):

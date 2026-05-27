@@ -11,13 +11,12 @@ from src.utils import DeviceDataLoader
 
 
 class TinyStoriesCorpus(Dataset):
-    """
-    Custom torch dataset class for TinyStories data. It takes the raw dataset and a trained tokenizer.
+    """pretraining corpus torch dataset
 
     Args:
-    - config: model configuration dictionary
-    - data: raw dataset to be processed
-    - tokenizer: trained tokenizer to tokenize the text data
+        config: model configuration dictionary
+        data: raw dataset to be processed
+        tokenizer: trained tokenizer to tokenize the text data
     """
 
     def __init__(self, config, data, tokenizer):
@@ -60,18 +59,11 @@ class TinyStoriesCorpus(Dataset):
         }
 
 
-def create_collate_fn(config, tokenizer):
-    """
-    Function generator for the custom collate_fn dataloader.
-    """
-    padding = config["special_tokens"]["padding"]
-    pad_id = tokenizer.token_to_id(padding)
+class CollateFn:
+    def __init__(self, pad_id):
+        self.pad_id = pad_id
 
-    # custom collate_fn to be passed to dataloader
-    def _collate_fn(batch: List[Dict]):
-        """
-        Custom collate_fn to pad variable length sequences in the batch to the same length.
-        """
+    def __call__(self, batch: List[Dict]):
         # get data from batch
         input_ids = [item["input_ids"] for item in batch]
 
@@ -91,50 +83,25 @@ def create_collate_fn(config, tokenizer):
 
         # we need to make all data has a fixed tensor size
         # so we expand tensor to max_len, fill the empty value with pad_value
-        input_ids = torch.stack([pad_tensor(t, pad_value=pad_id) for t in input_ids])
-
-        # dataloader output
-        return {
-            "input_ids": input_ids,
-        }
-
-    return _collate_fn
-
-
-class CollateFn:
-    def __init__(self, pad_id):
-        self.pad_id = pad_id
-
-    def __call__(self, batch: List[Dict]):
-        # get data from batch
-        input_ids = [item["input_ids"] for item in batch]
-
-        # find max length in batch
-        max_len = max([x.size(0) for x in input_ids])
-
-        # pad sequences to max_len
-        def pad_tensor(tensor, pad_value):
-            return torch.cat([
-                tensor,
-                torch.full(
-                    (max_len - tensor.size(0),), pad_value, dtype=tensor.dtype
-                ),
-            ])
-
-        # we need to make all data has a fixed tensor size
-        # so we expand tensor to max_len, fill the empty value with pad_value
-        input_ids = torch.stack([pad_tensor(t, pad_value=self.pad_id) for t in input_ids])
+        input_ids = torch.stack(
+            [pad_tensor(t, pad_value=self.pad_id) for t in input_ids]
+        )
 
         # dataloader output
         return {"input_ids": input_ids}
 
 
 def get_corpus_dataloaders(config, is_test=False):
-    """
-    Returns train and val corpus dataloaders.
+    """returns train and val pretraining corpus dataloaders
 
     Args:
-    - config: model configuration dictionary
+        config: model configuration dictionary
+        is_test: return few samples of the dataset for testing
+
+    Returns:
+        train_dl: training dataloader
+        val_dl: validation dataloader
+        tokenizer: trained tokenizer
     """
     trust = config["trust_source"]
 

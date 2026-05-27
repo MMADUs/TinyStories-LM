@@ -6,7 +6,7 @@ import torch.nn.functional as F
 
 
 class SwiGLUFeedForward(nn.Module):
-    """feed forward network with SwiGLU activation.
+    """feed forward network with SwiGLU activation
 
     Args:
         d_model: dimension of the model (embedding size)
@@ -37,19 +37,19 @@ class SwiGLUFeedForward(nn.Module):
 
 
 class MoERouter(nn.Module):
-    """
-    Routes input tokens to top-k experts.
+    """routes input tokens to top-k experts
 
     Args:
-    - d_model: dimension of the model
-    - num_experts: total number of experts
-    - top_k: number of experts to route each token to
+        d_model: dimension of the model
+        num_experts: total number of experts
+        top_k: number of experts to route each token to
     """
 
     def __init__(self, d_model: int, num_experts: int, top_k: int):
         super().__init__()
         self.num_experts = num_experts
         self.top_k = top_k
+
         self.gate = nn.Linear(d_model, num_experts, bias=False)
 
     def forward(self, x):
@@ -57,28 +57,27 @@ class MoERouter(nn.Module):
         gate_logits = self.gate(x)  # (batch, seq_len, num_experts)
 
         # top-k experts per token
-        top_k_logits, top_k_indices = torch.topk(gate_logits, self.top_k, dim=-1)
-        # (batch, seq_len, top_k)
+        top_k_logits, top_k_indices = torch.topk(
+            gate_logits, self.top_k, dim=-1
+        )  # (batch, seq_len, top_k)
 
-        # softmax only over selected top-k (sparse)
-        top_k_weights = F.softmax(top_k_logits, dim=-1)
-        # (batch, seq_len, top_k)
+        # softmax only over selected top-k
+        top_k_weights = F.softmax(top_k_logits, dim=-1)  # (batch, seq_len, top_k)
 
         return top_k_weights, top_k_indices
 
 
 class MixtureOfExperts(nn.Module):
-    """
-    Mixture of Experts layer using SwiGLU feed-forward experts.
-    Replaces a standard FFN layer in a transformer block.
+    """Mixture of Experts layer using SwiGLU feed-forward experts
 
     Args:
-    - d_model: dimension of the model
-    - d_ff: dimension of each expert's feed-forward network
-    - dropout: dropout rate
-    - num_experts: total number of experts
-    - top_k: number of experts each token is routed to
-    - aux_loss_coef: coefficient for auxiliary load balancing loss
+        d_model: dimension of the model
+        d_ff: dimension of each expert's feed-forward network
+        dropout: dropout rate
+        is_training: enable during training phase
+        num_experts: total number of experts
+        top_k: number of experts each token is routed to
+        aux_loss_coef: coefficient for auxiliary load balancing loss
     """
 
     def __init__(
@@ -86,6 +85,7 @@ class MixtureOfExperts(nn.Module):
         d_model: int,
         d_ff: int,
         dropout: float,
+        is_training: bool,
         num_experts: int = 8,
         top_k: int = 2,
         aux_loss_coef: float = 0.01,
@@ -93,20 +93,19 @@ class MixtureOfExperts(nn.Module):
         super().__init__()
         assert top_k <= num_experts, "top_k cannot exceed num_experts"
 
+        self.is_training = is_training
         self.num_experts = num_experts
         self.top_k = top_k
         self.aux_loss_coef = aux_loss_coef
 
+        # router -> many experts
         self.router = MoERouter(d_model, num_experts, top_k)
         self.experts = nn.ModuleList(
             [SwiGLUFeedForward(d_model, d_ff, dropout) for _ in range(num_experts)]
         )
 
     def _aux_loss(self, top_k_indices, batch, seq_len):
-        """
-        Load balancing loss: penalizes uneven expert utilization.
-        From Switch Transformer: encourages uniform distribution across experts.
-        """
+        """load balancing loss: penalizes uneven expert utilization"""
         # fraction of tokens routed to each expert
         flat_indices = top_k_indices.view(-1)  # (batch * seq_len * top_k,)
         total_tokens = batch * seq_len * self.top_k
@@ -153,7 +152,11 @@ class MixtureOfExperts(nn.Module):
                 weight = expert_weights[mask].unsqueeze(-1)  # (num_selected, 1)
                 out[mask] += expert_output * weight
 
-        # auxiliary load balancing loss
-        aux_loss = self._aux_loss(top_k_indices, batch, seq_len)
+        if self.training:
+            # compute auxiliary load balancing loss
+            aux_loss = self._aux_loss(top_k_indices, batch, seq_len)
 
-        return out, aux_loss * self.aux_loss_coef
+            return out, aux_loss * self.aux_loss_coef
+
+        # inference should not include aux loss
+        return out, None
