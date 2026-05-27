@@ -38,6 +38,7 @@ class DecoderBlock(nn.Module):
         dropout: float,
         # required args to enable MoE, default to feedforward
         is_training: bool,
+        expert_d_ff: int,
         using_moe: bool = False,
         num_experts: int = None,
         top_k: int = None,
@@ -52,7 +53,7 @@ class DecoderBlock(nn.Module):
         if using_moe:
             self.ffn = MixtureOfExperts(
                 d_model,
-                d_ff,
+                expert_d_ff,
                 dropout,
                 is_training,
                 num_experts,
@@ -68,12 +69,22 @@ class DecoderBlock(nn.Module):
 
     def forward(self, x, mask):
         # masked attention
-        x = self.attn_resid(x, lambda x: self.attn(x, mask))
+        x = self.attn_resid(
+            x,
+            lambda norm_x: self.attn(norm_x, mask),
+        )
 
-        # feed forward
+        # feed forward / MoE
         if self.using_moe:
-            ffn_out, aux_loss = self.ffn(x)
-            x = self.ffn_resid(x, lambda _: ffn_out)
+            temp = {}
+
+            def moe_sublayer(norm_x):
+                moe_out, aux_loss = self.ffn(norm_x)
+                temp["aux_loss"] = aux_loss
+                return moe_out
+
+            x = self.ffn_resid(x, moe_sublayer)
+            aux_loss = temp["aux_loss"]
         else:
             x = self.ffn_resid(x, self.ffn)
             aux_loss = x.new_tensor(0.0)
@@ -103,16 +114,16 @@ class LMDecoder(nn.Module):
         vocab_size: int,
         d_model: int,
         h: int,
-        # dim feed forward for both ffn or experts ffn
         d_ff: int,
         num_layers: int,
         dropout: float,
         # required args to enable MoE, default to feedforward
+        using_moe: bool,
         is_training: bool,
-        using_moe: bool = False,
-        num_experts: int = None,
-        top_k: int = None,
-        aux_loss_coef: float = None,
+        num_experts: int,
+        expert_d_ff: int,
+        top_k: int,
+        aux_loss_coef: float,
     ):
         super().__init__()
 
@@ -121,15 +132,18 @@ class LMDecoder(nn.Module):
         self.layers = nn.ModuleList(
             [
                 DecoderBlock(
-                    d_model,
-                    h,
-                    d_ff,
-                    dropout,
-                    is_training,
-                    using_moe,
-                    num_experts,
-                    top_k,
-                    aux_loss_coef,
+                    # std config
+                    d_model=d_model,
+                    h=h,
+                    d_ff=d_ff,
+                    dropout=dropout,
+                    # moe config
+                    using_moe=using_moe,
+                    is_training=is_training,
+                    expert_d_ff=expert_d_ff,
+                    num_experts=num_experts,
+                    top_k=top_k,
+                    aux_loss_coef=aux_loss_coef,
                 )
                 for _ in range(num_layers)
             ]
@@ -236,34 +250,32 @@ def build_model(config, tokenizer, is_training):
         tokenizer: a tokenizer object with a vocab_size attribute
         is_training: enable during training phase (specifically for MoE)
     """
-    vocab_size = tokenizer.get_vocab_size()
 
-    # configuration needed
-    d_model = config["d_model"]
-    h = config["num_heads"]
-    d_ff = config["d_ff"]
-    num_layers = config["num_layers"]
-    dropout = config["dropout"]
-    using_moe = config["using_moe"]
-    num_experts = config["num_experts"]
-    top_k = config["top_k_experts"]
-    aux_loss_coef = config.get("aux_loss_coef", 0.01)
-
-    init_std = config["init_std"]
-
+    # build decoder model
     model = LMDecoder(
-        vocab_size,
-        d_model,
-        h,
-        d_ff,
-        num_layers,
-        dropout,
-        is_training,
-        using_moe,
-        num_experts,
-        top_k,
-        aux_loss_coef,
+        # mandatory config
+        vocab_size=tokenizer.get_vocab_size(),
+        d_model=config["d_model"],
+        h=config["num_heads"],
+        num_layers=config["num_layers"],
+        dropout=config["dropout"],
+        using_moe=config.get("enable_moe", False),  # ffn is default
+        # place config depending on 'enable_moe'
+        # safely ignored when using MoE
+        d_ff=config.get("d_ff", None),
+        is_training=is_training,
+        # safely ignored when using d_ff
+        num_experts=config.get("n_experts", None),
+        expert_d_ff=config.get("expert_d_ff", None),
+        top_k=config.get("top_k_expert", None),
+        aux_loss_coef=config.get("aux_loss_coef", 0.01),
     )
-    init_params(model, init_std)
+
+    # initialize weights
+    init_params(
+        model,
+        init_std=config["init_std"],
+        n_layers=config["num_layers"],
+    )
 
     return model

@@ -34,7 +34,7 @@ class LoRALinear(nn.Module):
     ):
         super().__init__()
 
-        assert rank <= 0, "rank must be greater than 0"
+        assert rank > 0, "rank must be greater than 0"
 
         self.rank = rank
         self.alpha = alpha
@@ -86,11 +86,11 @@ class LoRALinear(nn.Module):
 
     def forward(self, x):
         # freezed layer
-        x = self.base_layer(x)
-        base_out = self.dropout(x)
+        base_out = self.base_layer(x)
+        lora_x = self.dropout(x)
 
         # lower rank layer
-        lora_out = F.linear(input=base_out, weight=self.lora_A, bias=None)
+        lora_out = F.linear(input=lora_x, weight=self.lora_A, bias=None)
         lora_out = F.linear(input=lora_out, weight=self.lora_B, bias=None)
 
         return base_out + self.scaling * lora_out
@@ -134,7 +134,10 @@ def apply_lora(
     Returns:
         model: injected lora model
     """
-    for module_name, module in model.named_parameters():
+    if target_modules is None:
+        return model
+
+    for module_name, module in model.named_modules():
         for child_name, child_module in list(module.named_children()):
             # check if linear
             if isinstance(child_module, nn.Linear) and child_name in target_modules:

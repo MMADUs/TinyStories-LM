@@ -11,7 +11,7 @@ pretraining_config = EasyDict(__name__="Pre-training Configuration")
 # most critical parameter during training
 # maximum input token sequence, anything longer will be truncanated and immediately ended with EOS
 # number is taken from the avg of the tokenized seq len from the entire corpus
-pretraining_config.max_seq_truncation = 512  
+pretraining_config.max_seq_truncation = 512
 
 pretraining_config.batch_size = 8  # train batch size
 
@@ -40,7 +40,7 @@ pretraining_config.callback_metrics_mode = "min"  # min or max, tells the model 
 pretraining_config.ckpt_epsilon = 0  # minimum improvement to save a new checkpoint
 
 # append once to history every N steps
-pretraining_config.append_train_history_step = 1000 
+pretraining_config.append_train_history_step = 1000
 pretraining_config.append_val_history_step = 100
 
 
@@ -53,7 +53,7 @@ sft_config = EasyDict(__name__="Supervised Fine-Tuning Configuration")
 # most critical parameter during training
 # maximum input token sequence, anything longer will be truncanated and immediately ended with EOS
 # number is taken from the avg of the tokenized seq len from the entire corpus
-sft_config.max_seq_truncation = 512 
+sft_config.max_seq_truncation = 512
 
 sft_config.batch_size = 8  # train batch size
 
@@ -78,5 +78,33 @@ sft_config.callback_metrics_mode = "min"  # # min or max, tells the model if the
 sft_config.ckpt_epsilon = 0.01  # minimum improvement to save a new checkpoint
 
 # append once to history every N steps
-sft_config.append_train_history_step = 1000 
+sft_config.append_train_history_step = 1000
 sft_config.append_val_history_step = 100
+
+
+#####################################
+# LoRA (low-rank adaptation) config #
+#####################################
+
+lora_config = EasyDict(__name__="LoRA (Low-Rank Adaptation) Configuration")
+
+lora_config.target_modules = (
+    "w_q",
+    "w_v",
+)  # target linear layers to replace with LoRA adapters
+
+# rank = bottleneck dimension of the LoRA adapter
+# LoRA learns: original_output + B(Ax)
+# A projects from d_model -> rank
+# B projects from rank -> d_model
+# smaller rank = fewer trainable params, less capacity
+# larger rank = more trainable params, more adaptation capacity
+lora_config.rank = 8
+
+lora_config.alpha = 16  # LoRA scaling factor, common rule = 2 * rank
+lora_config.dropout = (
+    0.05  # LoRA dropout rate, dropout applied only on the LoRA branch input
+)
+lora_config.is_quantized = (
+    True  # QLoRA freeze base layer and store/use it in 4-bit quantized form
+)

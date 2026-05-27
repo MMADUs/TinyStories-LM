@@ -74,13 +74,13 @@ def init_params(model: nn.Module, init_std, n_layers):
             if name.endswith(("w_o", "proj_2")):
                 std = init_std / math.sqrt(2 * n_layers)
             # layer weights
-            nn.init.normal(module.weight, mean=0.0, std=std)
+            nn.init.normal_(module.weight, mean=0.0, std=std)
             # layer with bias
             if module.bias is not None:
                 nn.init.zeros_(module.bias)
         # embedding init
         elif isinstance(module, nn.Embedding):
-            nn.init.normal(module.weight, mean=0.0, std=std)
+            nn.init.normal_(module.weight, mean=0.0, std=init_std)
         # rms norm init
         elif isinstance(module, RMSNorm):
             nn.init.ones_(module.alpha)

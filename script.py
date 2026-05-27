@@ -9,14 +9,30 @@ import argparse
 import pickle
 import json
 
-from config.lm_v1_9M import _9M_config as model_9M_params
-from config.lm_v1_19M import _19M_config as model_19M_params
-from config.lm_v1_40M import _40M_config as model_40M_params
+from config.std_9M import std_9M
+from config.std_21M import std_21M
+from config.std_43M import std_43M
+
+from config.MoE_9M import MoE_9M
+from config.MoE_21M import MoE_21M
+from config.MoE_43M import MoE_43M
 
 from config.utils import load_config
 from src.corpus import get_corpus_dataloaders
 from src.instruct import get_sft_dataloaders
 from src.train import train_model
+
+STD_MODELS = {
+    "9M": std_9M,
+    "21M": std_21M,
+    "43M": std_43M,
+}
+
+MOE_MODELS = {
+    "9M": MoE_9M,
+    "21M": MoE_21M,
+    "43M": MoE_43M,
+}
 
 
 def main():
@@ -24,10 +40,11 @@ def main():
 
     parser.add_argument(
         "--model_size",
-        choices=["9M", "19M", "40M"],
+        choices=["9M", "21M", "43M"],
         required=True,
         help="model size to train",
     )
+    parser.add_argument("--moe", action="store_true", help="using MoE in the model")
     parser.add_argument(
         "--version", required=True, help="version name for the training run"
     )
@@ -37,6 +54,7 @@ def main():
         required=True,
         help="training phase",
     )
+    parser.add_argument("--lora", action="store_true", help="enable LoRA finetuning")
     parser.add_argument(
         "--state", choices=["initial", "resume"], required=True, help="training state"
     )
@@ -50,15 +68,17 @@ def main():
     if args.state == "resume" and args.load_epoch is None:
         parser.error("--load_epoch is required when --state is resume")
 
+    if args.phase == "pretraining" and args.lora:
+        parser.error("LoRA should only be used for fine tuning")
+
     # select config
-    if args.model_size == "9M":
-        model_config = model_9M_params
-    elif args.model_size == "19M":
-        model_config = model_19M_params
-    elif args.model_size == "40M":
-        model_config = model_40M_params
-    else:
-        raise ValueError("invalid model size")
+    try:
+        if args.moe:
+            model_config = MOE_MODELS[args.model_size]
+        else:
+            model_config = STD_MODELS[args.model_size]
+    except KeyError:
+        raise ValueError(f"invalid model size: {args.model_size}")
 
     # load config
     config = load_config(model_config)
@@ -78,12 +98,15 @@ def main():
         val_dl,
         tokenizer,
         stage=args.phase,
+        enable_lora=args.lora,
         version=args.version,
         initial_train=(args.state == "initial"),
         load_from_epoch=args.load_epoch,
     )
 
-    with open(f"{config['output_dir_path']}/{args.state}_history_{args.version}.pkl", "wb") as f:
+    with open(
+        f"{config['output_dir_path']}/{args.state}_history_{args.version}.pkl", "wb"
+    ) as f:
         pickle.dump(history, f)
 
 

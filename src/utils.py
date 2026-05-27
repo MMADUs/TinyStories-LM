@@ -23,17 +23,6 @@ def set_random_seed(seed: int):
     torch.backends.cudnn.benchmark = False
 
 
-def calculate_scheduler_steps(init_epoch, train_config, train_dl_length):
-    """calculate the number of training steps and warmup steps for lr scheduler"""
-    lr_warmup_percentage = train_config["lr_warmup_percentage"]
-    remaining_epochs = train_config["num_epochs"] - init_epoch
-
-    num_training_steps = train_dl_length * remaining_epochs
-    num_warmup_steps = int(lr_warmup_percentage * num_training_steps)
-
-    return num_training_steps, num_warmup_steps
-
-
 class DeviceDataLoader:
     """wrapper around torch DataLoader that moves data to the specified device
 
@@ -69,9 +58,7 @@ def time_formatter(sec_elapsed: float) -> str:
     return f"{h}:{m}:{round(s, 1)}"
 
 
-def model_summary(config, batch_size, tokenizer, depth: int):
-    model = build_model(config, tokenizer)
-
+def model_summary(config, model, batch_size, depth: int):
     # make sure weight is tied
     print(model.proj.weight is model.embedding.get_weights())
 

@@ -10,8 +10,20 @@ from torch.amp import autocast, GradScaler
 from transformers import get_cosine_schedule_with_warmup
 
 from src.modules.utils import get_attn_mask
-from src.utils import time_formatter, set_random_seed, calculate_scheduler_steps
+from src.modules.lora_linear import apply_lora
+from src.utils import time_formatter, set_random_seed
 from src.serialization import get_or_build_state, save_checkpoint_state
+
+
+def calculate_scheduler_steps(init_epoch, train_config, train_dl_length):
+    """calculate the number of training steps and warmup steps for lr scheduler"""
+    lr_warmup_percentage = train_config["lr_warmup_percentage"]
+    remaining_epochs = train_config["num_epochs"] - init_epoch
+
+    num_training_steps = train_dl_length * remaining_epochs
+    num_warmup_steps = int(lr_warmup_percentage * num_training_steps)
+
+    return num_training_steps, num_warmup_steps
 
 
 def train_model(
@@ -20,7 +32,8 @@ def train_model(
     val_dl,
     tokenizer,
     stage: Literal["pretraining", "finetuning"],
-    version: str = "NA",
+    enable_lora: bool,
+    version: str = "N/A",
     initial_train: bool = True,
     load_from_epoch: Optional[int] = None,
 ) -> dict:
@@ -74,6 +87,19 @@ def train_model(
         label_smoothing=stage_config["label_smoothing"],
     )
 
+    # LoRA injection
+    if stage == "finetuning" and enable_lora:
+        lora_config = stage_config["lora"]
+
+        model = apply_lora(
+            model=model,
+            target_modules=lora_config["target_modules"],
+            rank=lora_config["rank"],
+            alpha=lora_config["alpha"],
+            dropout=lora_config["dropout"],
+            is_quantized=lora_config["is_quantized"],
+        )
+
     # # gradient scaler
     # scaler = GradScaler()
 
@@ -112,8 +138,6 @@ def train_model(
             with autocast(device_type=str(device), dtype=torch.bfloat16):
                 # forward
                 logits, aux_loss = model(x=input_ids, mask=attention_mask)
-                
-                # TODO: handle aux loss
 
                 # drop last token to shift logits
                 shift_logits = logits[:, :-1, :].contiguous()
@@ -137,10 +161,13 @@ def train_model(
                     raise ValueError(f"Invalid stage: {stage}")
 
                 # compute loss
-                loss = loss_fn(
+                ce_loss = loss_fn(
                     shift_logits.view(-1, tokenizer.get_vocab_size()),
                     shift_labels.view(-1),
                 )
+
+                # combine loss, here aux loss act as regularization penalty term
+                loss = ce_loss + aux_loss
 
             # scale gradient then backward
             # scaler.scale(loss).backward()
@@ -192,9 +219,8 @@ def train_model(
 
                 with autocast(device_type=str(device), dtype=torch.bfloat16):
                     # forward
-                    logits, aux_loss = model(x=input_ids, mask=attention_mask)
-
-                    # TODO: handle aux loss
+                    # since aux loss act as regularization penalty term, we can ignore it
+                    logits, _ = model(x=input_ids, mask=attention_mask)
 
                     # drop last token to shift logits
                     shift_logits = logits[:, :-1, :].contiguous()
